@@ -1,4 +1,6 @@
 # src/core/camera_troubleshoot.py
+import os
+
 class CameraTroubleshooter:
     """カメラ問題診断・修復"""
     

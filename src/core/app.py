@@ -4,6 +4,7 @@
 import pygame
 import sys
 import time
+import cv2
 from camera_manager import CameraManager
 
 class AquaMirrorApp:

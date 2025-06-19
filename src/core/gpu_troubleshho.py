@@ -1,4 +1,8 @@
 # src/core/gpu_troubleshoot.py
+import subprocess
+import sys
+
+
 class GPUTroubleshooter:
     """GPU問題診断・修復"""
     
