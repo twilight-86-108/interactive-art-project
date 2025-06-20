@@ -4,6 +4,7 @@ import mediapipe as mp
 import numpy as np
 import logging
 from typing import Optional, Tuple, Dict, Any, List
+from mediapipe.python.solutions import hands, drawing_utils
 
 class HandDetector:
     """手検出クラス（エラー修正版）"""
@@ -13,8 +14,8 @@ class HandDetector:
         self.logger = logging.getLogger(__name__)
         
         # MediaPipe初期化
-        self.mp_hands = mp.solutions.hands
-        self.mp_drawing = mp.solutions.drawing_utils
+        self.mp_hands = hands
+        self.mp_drawing = drawing_utils
         
         try:
             # 設定取得（デフォルト値付き）
@@ -48,7 +49,7 @@ class HandDetector:
             # 手検出実行
             results = self.hands.process(rgb_frame)
             
-            if results.multi_hand_landmarks:
+            if hasattr(results, 'multi_hand_landmarks') and results.multi_hand_landmarks:  # type: ignore
                 return self._process_hand_results(results, frame.shape)
             else:
                 return None
@@ -57,7 +58,7 @@ class HandDetector:
             self.logger.error(f"手検出エラー: {e}")
             return None
     
-    def _process_hand_results(self, results, frame_shape: Tuple[int, int, int]) -> Dict[str, Any]:
+    def _process_hand_results(self, results, frame_shape: Tuple[int, ...]) -> Dict[str, Any]:
         """手検出結果の処理"""
         try:
             height, width = frame_shape[:2]
@@ -158,7 +159,7 @@ class HandDetector:
             self.logger.error(f"指先位置取得エラー: {e}")
             return {}
     
-    def _estimate_hand_orientation(self, landmarks) -> Dict[str, float]:
+    def _estimate_hand_orientation(self, landmarks) -> Dict[str, Any]:
         """手の向き推定"""
         try:
             # 手首と中指の基準点を使用

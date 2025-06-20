@@ -57,7 +57,7 @@ class VisionProcessor:
                 return self.last_detection_result
             
             # GPU前処理
-            processed_frame = self.gpu_processor.preprocess_frame(frame)
+            processed_frame = self.gpu_processor.process_frame_optimized(frame)
             if processed_frame is None:
                 processed_frame = frame
             
@@ -65,7 +65,7 @@ class VisionProcessor:
             detection_result = self._perform_detections(processed_frame)
             
             # 結果統合
-            integrated_result = self._integrate_results(detection_result, frame.shape)
+            integrated_result = self._integrate_results(detection_result, tuple(frame.shape))
             
             # パフォーマンス監視
             processing_time = time.time() - start_time
@@ -101,7 +101,7 @@ class VisionProcessor:
             self.logger.error(f"検出処理エラー: {e}")
             return {}
     
-    def _integrate_results(self, detection_result: Dict[str, Any], frame_shape: Tuple[int, int, int]) -> Dict[str, Any]:
+    def _integrate_results(self, detection_result: Dict[str, Any], frame_shape: Tuple[int, ...]) -> Dict[str, Any]:
         """検出結果の統合"""
         try:
             integrated = {
@@ -284,7 +284,7 @@ class VisionProcessor:
                 'Hand Count': result.get('hand_count', 0),
                 'Frame Skip': self.frame_skip,
                 'Quality Level': self.quality_level,
-                'GPU Available': self.gpu_processor.is_gpu_available()
+                'GPU Available': self.gpu_processor.get_system_info().get('gpu_available', False)
             }
             
             # パフォーマンス情報

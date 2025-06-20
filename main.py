@@ -224,14 +224,15 @@ def run_tests(config):
         logger.info("4. MediaPipe初期化テスト...")
         try:
             import mediapipe as mp
+            from mediapipe.python.solutions import face_mesh, hands
             
             # 顔検出初期化テスト
-            face_mesh = mp.solutions.face_mesh.FaceMesh()
-            face_mesh.close()
+            face_mesh_instance = face_mesh.FaceMesh()
+            face_mesh_instance.close()
             
             # 手検出初期化テスト
-            hands = mp.solutions.hands.Hands()
-            hands.close()
+            hands_instance = hands.Hands()
+            hands_instance.close()
             
             test_results['mediapipe_init'] = True
             logger.info("✅ MediaPipe初期化成功")

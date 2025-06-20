@@ -268,7 +268,7 @@ class EmotionAnalyzer:
                 return Emotion.NEUTRAL
             
             # 最高スコアの感情を返す
-            best_emotion = max(emotion_scores, key=emotion_scores.get)
+            best_emotion = max(emotion_scores, key=lambda k: emotion_scores[k])
             return best_emotion
             
         except Exception as e:
