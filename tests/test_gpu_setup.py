@@ -60,7 +60,7 @@ def test_gpu_libraries():
             print("   ✅ GPU メモリ成長設定完了")
             
             # 簡単な計算テスト
-            with tf.device('/GPU:0'):
+            with tf.device('/GPU:0'):  # type: ignore
                 a = tf.constant([[1.0, 2.0], [3.0, 4.0]])
                 b = tf.constant([[2.0, 1.0], [4.0, 3.0]])
                 c = tf.matmul(a, b)

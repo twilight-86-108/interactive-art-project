@@ -1,14 +1,12 @@
 {
-  "_comment": "Aqua Mirror - メイン設定ファイル（修正版）",
-  "_version": "1.1.0",
-  "_last_updated": "2024-12-19",
+  "_comment": "Aqua Mirror - メイン設定ファイル",
   
   "system": {
     "name": "Aqua Mirror",
-    "version": "1.1.0",
+    "version": "1.0.0",
     "debug_mode": false,
-    "demo_mode": false,
-    "test_mode": false
+    "presentation_mode": false,
+    "demo_mode": false
   },
   
   "camera": {
@@ -20,33 +18,47 @@
       "autofocus": false,
       "auto_exposure": true,
       "auto_white_balance": true
-    },
-    "buffer_size": 1
+    }
   },
   
   "display": {
     "width": 1920,
     "height": 1080,
     "fullscreen": false,
-    "monitor_index": 0,
-    "refresh_rate": 60
+    "monitor_index": 0
   },
   
   "detection": {
     "face_detection_confidence": 0.7,
     "hand_detection_confidence": 0.7,
-    "min_tracking_confidence": 0.5,
     "max_num_faces": 1,
     "max_num_hands": 2,
-    "refine_landmarks": true
+    "face_detection": {
+      "model_complexity": 1,
+      "min_detection_confidence": 0.7,
+      "min_tracking_confidence": 0.5,
+      "max_num_faces": 1,
+      "refine_landmarks": true
+    },
+    "hand_detection": {
+      "model_complexity": 1,
+      "min_detection_confidence": 0.7,
+      "min_tracking_confidence": 0.5,
+      "max_num_hands": 2
+    }
   },
   
   "emotion": {
     "enabled": true,
     "smoothing_window": 10,
     "confidence_threshold": 0.6,
-    "calibration_enabled": true,
-    "emotions": ["neutral", "happy", "sad", "surprised", "angry"]
+    "calibration_enabled": true
+  },
+  
+  "gesture": {
+    "enabled": true,
+    "recognition_timeout": 2.0,
+    "custom_gestures": true
   },
   
   "interaction": {
@@ -58,36 +70,22 @@
         "width": 1120,
         "height": 480
       }
-    },
-    "gesture_timeout": 2.0,
-    "gesture_confidence": 0.7
+    }
   },
   
   "visual_effects": {
-    "quality_level": "medium",
-    "adaptive_quality": true,
+    "quality_level": "high",
     "particles": {
-      "max_count": 500,
-      "gpu_acceleration": true,
-      "emission_rate": 50,
-      "lifetime_range": [1.0, 3.0]
+      "max_count": 1000,
+      "gpu_acceleration": true
     },
     "water_effects": {
       "wave_simulation": true,
-      "caustics": false,
-      "max_ripples": 10,
-      "ripple_lifetime": 2.0
+      "caustics": true
     },
     "colors": {
       "saturation_boost": 1.2,
-      "transition_speed": 0.5,
-      "emotion_colors": {
-        "happy": [255, 223, 0],
-        "sad": [70, 130, 180],
-        "angry": [220, 20, 60],
-        "surprised": [255, 20, 147],
-        "neutral": [72, 209, 204]
-      }
+      "transition_speed": 0.5
     }
   },
   
@@ -96,49 +94,22 @@
     "master_volume": 0.7,
     "sample_rate": 22050,
     "channels": 2,
-    "buffer_size": 1024,
-    "procedural_generation": true,
-    "spatial_audio": false
+    "procedural_generation": true
   },
   
   "performance": {
     "target_fps": 30,
     "adaptive_quality": true,
     "memory_limit_mb": 16384,
-    "monitoring_enabled": true,
-    "gpu_optimization": true,
-    "frame_skip_threshold": 25
+    "monitoring_enabled": true
   },
   
   "assets": {
-    "base_path": "assets",
-    "images": {
-      "background": "assets/images/underwater_scene.jpg",
-      "textures": "assets/images/textures/",
-      "ui": "assets/images/ui/",
-      "fish": [
-        "assets/images/fish1.png",
-        "assets/images/fish2.png",
-        "assets/images/fish3.png"
-      ]
-    },
-    "audio": {
-      "bgm": "assets/audio/bgm/",
-      "sfx": "assets/audio/sfx/",
-      "sounds": {
-        "splash": "assets/audio/sfx/splash.wav",
-        "bubble": "assets/audio/sfx/bubble.wav",
-        "chime": "assets/audio/sfx/chime.wav",
-        "whoosh": "assets/audio/sfx/whoosh.wav"
-      }
-    },
-    "models": {
-      "emotion_classifier": "assets/models/emotion_classifier.pkl",
-      "gesture_templates": "assets/models/gesture_templates.json"
-    },
-    "fonts": {
-      "main": "assets/fonts/main_font.ttf",
-      "debug": "assets/fonts/debug_font.ttf"
+    "background_image": "assets/images/underwater_scene.jpg",
+    "fish_images": ["assets/images/fish1.png", "assets/images/fish2.png"],
+    "sounds": {
+      "splash": "assets/sounds/splash.wav",
+      "bubble": "assets/sounds/bubble.wav"
     }
   },
   
