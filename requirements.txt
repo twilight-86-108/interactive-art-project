@@ -1,19 +1,5 @@
-# Core dependencies
-opencv-python==4.9.0.80
-mediapipe==0.10.11
+opencv-python==4.9.0
+mediapipe==0.10.14
 pygame==2.5.2
 numpy==1.26.4
-
-# Additional libraries
-Pillow==10.2.0
-scipy==1.12.0
-scikit-learn==1.4.0
-
-# Development dependencies
-pytest==8.0.0
-pytest-cov==4.0.0
-black==24.1.0
-flake8==7.0.0
-
-# Optional GPU acceleration
-# cupy-cuda11x==13.0.0
+urllib3

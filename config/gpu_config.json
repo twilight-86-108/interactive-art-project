@@ -1,0 +1,14 @@
+{
+  "gpu_optimization": {
+    "enabled": true,
+    "memory_limit_gb": 6,
+    "memory_growth": true,
+    "device_id": 0,
+    "fallback_to_cpu": true
+  },
+  "rtx4060_settings": {
+    "thermal_management": true,
+    "power_limit": 75,
+    "memory_optimization": true
+  }
+}
