@@ -1,353 +1,347 @@
+# src/vision/vision_processor.py
 import cv2
+import numpy as np
 import time
-from typing import Dict, Optional
+import logging
+from typing import Optional, Dict, Any, Tuple
+from collections import deque
+
+# 個別検出器のインポート
 from .face_detector import FaceDetector
 from .hand_detector import HandDetector
-from ..emotion.emotion_analyzer import EmotionAnalyzer, Emotion
+from ..core.gpu_processor import GPUProcessor
 
 class VisionProcessor:
-    """統合画像処理・AI システム（Day 3版）"""
+    """統合画像処理エンジン（エラー修正版）"""
     
-    def __init__(self, config: dict):
+    def __init__(self, config: Dict[str, Any]):
         self.config = config
+        self.logger = logging.getLogger(__name__)
         
-        # AI コンポーネント初期化
-        self.face_detector = FaceDetector(config)
-        self.hand_detector = HandDetector(config)
-        self.emotion_analyzer = EmotionAnalyzer(config)
+        # パフォーマンス管理
+        self.frame_skip = 0
+        self.adaptive_quality = config.get('adaptive_quality', True)
+        self.processing_times = deque(maxlen=30)
+        self.last_detection_result = {}
         
-        # 処理状態
-        self.processing_enabled = True
-        self.debug_mode = config.get('debug_mode', False)
-        
-        # パフォーマンス統計
-        self.total_processing_times = []
-        self.frame_count = 0
-        
-        print("✅ Vision Processor 統合初期化完了")
+        try:
+            # GPU プロセッサー初期化
+            self.gpu_processor = GPUProcessor()
+            
+            # 個別検出器初期化
+            self.face_detector = FaceDetector(config)
+            self.hand_detector = HandDetector(config)
+            
+            # 処理品質設定
+            self.quality_level = config.get('quality_level', 'medium')
+            self._adjust_quality_settings()
+            
+            self.logger.info("統合画像処理エンジンが初期化されました")
+            
+        except Exception as e:
+            self.logger.error(f"統合画像処理エンジン初期化エラー: {e}")
+            raise
     
-    def process_frame(self, frame: np.ndarray) -> Dict:
-        """統合フレーム処理"""
-        if not self.processing_enabled or frame is None:
-            return self._get_empty_result()
-        
+    def process_frame(self, frame: Optional[np.ndarray]) -> Dict[str, Any]:
+        """メインフレーム処理関数"""
         start_time = time.time()
         
         try:
-            # 1. 顔検出
-            face_result = self.face_detector.detect_face(frame)
+            # フレーム前処理
+            if frame is None:
+                return self.last_detection_result
             
-            # 2. 手検出
-            hand_result = self.hand_detector.detect_hands(frame)
+            # フレームスキップ制御
+            if self.frame_skip > 0:
+                self.frame_skip -= 1
+                return self.last_detection_result
             
-            # 3. 感情分析（顔が検出された場合）
-            emotion = Emotion.NEUTRAL
-            emotion_confidence = 0.0
-            if face_result['face_detected']:
-                emotion, emotion_confidence = self.emotion_analyzer.analyze_emotion(face_result)
+            # GPU前処理
+            processed_frame = self.gpu_processor.preprocess_frame(frame)
+            if processed_frame is None:
+                processed_frame = frame
             
-            # 統合結果作成
-            integrated_result = {
-                'timestamp': time.time(),
-                'frame_processed': True,
-                
-                # 顔検出結果
-                'face': face_result,
-                
-                # 手検出結果
-                'hands': hand_result,
-                
-                # 感情認識結果
-                'emotion': {
-                    'emotion': emotion,
-                    'confidence': emotion_confidence,
-                    'emotion_name': emotion.value
-                },
-                
-                # 統合処理時間
-                'processing_time': 0  # 後で設定
-            }
+            # 並列検出処理
+            detection_result = self._perform_detections(processed_frame)
             
-            # 処理時間記録
-            total_time = time.time() - start_time
-            integrated_result['processing_time'] = total_time
+            # 結果統合
+            integrated_result = self._integrate_results(detection_result, frame.shape)
             
-            self.total_processing_times.append(total_time)
-            if len(self.total_processing_times) > 100:
-                self.total_processing_times.pop(0)
+            # パフォーマンス監視
+            processing_time = time.time() - start_time
+            self.processing_times.append(processing_time)
             
-            self.frame_count += 1
+            # 適応的品質制御
+            if self.adaptive_quality:
+                self._adjust_performance()
             
+            self.last_detection_result = integrated_result
             return integrated_result
             
         except Exception as e:
-            print(f"⚠️  統合処理エラー: {e}")
-            return self._get_empty_result()
+            self.logger.error(f"フレーム処理エラー: {e}")
+            return self.last_detection_result
     
-    def _get_empty_result(self) -> Dict:
-        """空の結果"""
-        return {
-            'timestamp': time.time(),
-            'frame_processed': False,
-            'face': {'face_detected': False},
-            'hands': {'hands_detected': False},
-            'emotion': {
-                'emotion': Emotion.NEUTRAL,
-                'confidence': 0.0,
-                'emotion_name': 'neutral'
-            },
-            'processing_time': 0
-        }
-    
-    def draw_all_results(self, frame: np.ndarray, result: Dict, 
-                        show_face: bool = True, show_hands: bool = True, 
-                        show_emotion: bool = True) -> np.ndarray:
-        """全検出結果描画"""
-        if not result['frame_processed']:
-            return frame
-        
-        output_frame = frame.copy()
-        
+    def _perform_detections(self, frame: np.ndarray) -> Dict[str, Any]:
+        """検出処理の実行"""
         try:
-            # 顔検出結果描画
-            if show_face and result['face']['face_detected']:
-                output_frame = self.face_detector.draw_landmarks(
-                    output_frame, result['face'], draw_all=False
-                )
+            results = {}
             
-            # 手検出結果描画
-            if show_hands and result['hands']['hands_detected']:
-                output_frame = self.hand_detector.draw_landmarks(
-                    output_frame, result['hands'], draw_connections=True
-                )
-            
-            # 感情情報描画
-            if show_emotion:
-                output_frame = self._draw_emotion_info(output_frame, result['emotion'])
-            
-            # 統合情報描画（デバッグモード時）
-            if self.debug_mode:
-                output_frame = self._draw_debug_info(output_frame, result)
-        
-        except Exception as e:
-            print(f"⚠️  結果描画エラー: {e}")
-        
-        return output_frame
-    
-    def _draw_emotion_info(self, frame: np.ndarray, emotion_result: Dict) -> np.ndarray:
-        """感情情報描画"""
-        height, width = frame.shape[:2]
-        
-        emotion = emotion_result['emotion']
-        confidence = emotion_result['confidence']
-        emotion_name = emotion_result['emotion_name']
-        
-        # 感情に応じた色設定
-        emotion_colors = {
-            'happy': (0, 255, 255),      # 黄色
-            'sad': (255, 0, 0),          # 青
-            'angry': (0, 0, 255),        # 赤
-            'surprised': (255, 0, 255),  # マゼンタ
-            'neutral': (255, 255, 255)   # 白
-        }
-        
-        color = emotion_colors.get(emotion_name, (255, 255, 255))
-        
-        # 感情情報テキスト
-        text = f"Emotion: {emotion_name.upper()}"
-        confidence_text = f"Confidence: {confidence:.2f}"
-        
-        # 背景矩形
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 1.0
-        thickness = 2
-        
-        (text_width, text_height), _ = cv2.getTextSize(text, font, font_scale, thickness)
-        (conf_width, conf_height), _ = cv2.getTextSize(confidence_text, font, 0.8, thickness)
-        
-        max_width = max(text_width, conf_width)
-        total_height = text_height + conf_height + 20
-        
-        # 右上角に配置
-        rect_x = width - max_width - 20
-        rect_y = 10
-        
-        cv2.rectangle(frame, (rect_x - 10, rect_y), 
-                     (rect_x + max_width + 10, rect_y + total_height + 10), 
-                     (0, 0, 0), -1)
-        
-        # テキスト描画
-        cv2.putText(frame, text, (rect_x, rect_y + text_height + 5), 
-                   font, font_scale, color, thickness)
-        cv2.putText(frame, confidence_text, (rect_x, rect_y + text_height + conf_height + 15), 
-                   font, 0.8, color, thickness)
-        
-        return frame
-    
-    def _draw_debug_info(self, frame: np.ndarray, result: Dict) -> np.ndarray:
-        """デバッグ情報描画"""
-        height, width = frame.shape[:2]
-        
-        debug_info = [
-            f"Frame: {self.frame_count}",
-            f"Processing: {result['processing_time']:.3f}s",
-            f"Face: {'YES' if result['face']['face_detected'] else 'NO'}",
-            f"Hands: {result['hands']['hand_count']}",
-            f"FPS: {self._get_current_fps():.1f}"
-        ]
-        
-        # 左下に描画
-        y_start = height - len(debug_info) * 25 - 10
-        
-        for i, info in enumerate(debug_info):
-            y_pos = y_start + i * 25
-            cv2.putText(frame, info, (10, y_pos), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-        
-        return frame
-    
-    def _get_current_fps(self) -> float:
-        """現在のFPS取得"""
-        if len(self.total_processing_times) < 10:
-            return 0.0
-        
-        recent_times = self.total_processing_times[-10:]
-        avg_time = sum(recent_times) / len(recent_times)
-        return 1.0 / avg_time if avg_time > 0 else 0.0
-    
-    def calibrate_emotion_baseline(self, frame_count: int = 30) -> bool:
-        """感情認識ベースライン キャリブレーション"""
-        print(f"🎯 感情認識キャリブレーション開始（{frame_count}フレーム）...")
-        
-        calibration_results = []
-        
-        # カメラからフレーム取得してキャリブレーション
-        cap = cv2.VideoCapture(0)
-        if not cap.isOpened():
-            print("❌ キャリブレーション用カメラアクセス失敗")
-            return False
-        
-        print("😐 ニュートラルな表情を保ってください...")
-        
-        for i in range(frame_count):
-            ret, frame = cap.read()
-            if not ret:
-                continue
-            
-            # 顔検出のみ実行
+            # 顔検出
             face_result = self.face_detector.detect_face(frame)
-            if face_result['face_detected']:
-                calibration_results.append(face_result)
+            results['face'] = face_result
             
-            # 進捗表示
-            if i % 10 == 0:
-                print(f"キャリブレーション進捗: {i}/{frame_count}")
-        
-        cap.release()
-        
-        # ベースライン設定
-        success = self.emotion_analyzer.calibrate_baseline(calibration_results)
-        
-        if success:
-            print("✅ 感情認識キャリブレーション完了")
-        else:
-            print("❌ 感情認識キャリブレーション失敗")
-        
-        return success
+            # 手検出
+            hand_result = self.hand_detector.detect_hands(frame)
+            results['hand'] = hand_result
+            
+            return results
+            
+        except Exception as e:
+            self.logger.error(f"検出処理エラー: {e}")
+            return {}
     
-    def get_performance_stats(self) -> Dict:
-        """総合パフォーマンス統計"""
-        face_stats = self.face_detector.get_performance_stats()
-        hand_stats = self.hand_detector.get_performance_stats()
-        emotion_stats = self.emotion_analyzer.get_performance_stats()
-        
-        return {
-            'total_frames_processed': self.frame_count,
-            'avg_total_time': sum(self.total_processing_times) / len(self.total_processing_times) if self.total_processing_times else 0,
-            'current_fps': self._get_current_fps(),
-            'face_detection': face_stats,
-            'hand_detection': hand_stats,
-            'emotion_analysis': emotion_stats
-        }
+    def _integrate_results(self, detection_result: Dict[str, Any], frame_shape: Tuple[int, int, int]) -> Dict[str, Any]:
+        """検出結果の統合"""
+        try:
+            integrated = {
+                'timestamp': time.time(),
+                'frame_shape': frame_shape,
+                'processing_quality': self.quality_level
+            }
+            
+            # 顔検出結果の統合
+            face_data = detection_result.get('face')
+            if face_data:
+                integrated.update({
+                    'face_detected': face_data.get('face_detected', False),
+                    'face_landmarks': face_data.get('face_landmarks'),
+                    'face_center': face_data.get('face_center'),
+                    'face_distance': face_data.get('face_distance', float('inf')),
+                    'face_rotation': face_data.get('face_rotation', {}),
+                    'face_bbox': face_data.get('face_bbox', (0, 0, 0, 0)),
+                    'face_count': face_data.get('face_count', 0)
+                })
+            else:
+                integrated.update({
+                    'face_detected': False,
+                    'face_landmarks': None,
+                    'face_center': None,
+                    'face_distance': float('inf'),
+                    'face_rotation': {},
+                    'face_bbox': (0, 0, 0, 0),
+                    'face_count': 0
+                })
+            
+            # 手検出結果の統合
+            hand_data = detection_result.get('hand')
+            if hand_data:
+                integrated.update({
+                    'hands_detected': hand_data.get('hands_detected', False),
+                    'hand_landmarks': hand_data.get('hand_landmarks'),
+                    'hand_positions': hand_data.get('hand_positions', []),
+                    'hand_count': hand_data.get('hand_count', 0),
+                    'hands_info': hand_data.get('hands', []),
+                    'hand_gestures': self._extract_gestures(hand_data)
+                })
+            else:
+                integrated.update({
+                    'hands_detected': False,
+                    'hand_landmarks': None,
+                    'hand_positions': [],
+                    'hand_count': 0,
+                    'hands_info': [],
+                    'hand_gestures': []
+                })
+            
+            # 相互作用情報
+            integrated['interaction_data'] = self._analyze_interactions(integrated)
+            
+            return integrated
+            
+        except Exception as e:
+            self.logger.error(f"結果統合エラー: {e}")
+            return self.last_detection_result
     
-    def enable_processing(self, enabled: bool):
-        """処理有効/無効切替"""
-        self.processing_enabled = enabled
-        print(f"Vision Processing: {'ENABLED' if enabled else 'DISABLED'}")
+    def _extract_gestures(self, hand_data: Dict[str, Any]) -> list:
+        """手のジェスチャー情報抽出"""
+        try:
+            gestures = []
+            hands_info = hand_data.get('hands', [])
+            
+            for hand_info in hands_info:
+                gesture = hand_info.get('gesture', 'unknown')
+                if gesture != 'unknown':
+                    gestures.append({
+                        'type': gesture,
+                        'handedness': hand_info.get('handedness', 'Unknown'),
+                        'position': hand_info.get('wrist_position', (0, 0, 0)),
+                        'confidence': hand_info.get('confidence', 0.0)
+                    })
+            
+            return gestures
+            
+        except Exception as e:
+            self.logger.error(f"ジェスチャー抽出エラー: {e}")
+            return []
+    
+    def _analyze_interactions(self, integrated_data: Dict[str, Any]) -> Dict[str, Any]:
+        """顔と手の相互作用分析"""
+        try:
+            interaction = {
+                'face_hand_proximity': False,
+                'hand_near_face': False,
+                'pointing_at_face': False,
+                'gesture_active': False
+            }
+            
+            # 顔と手の距離分析
+            if (integrated_data.get('face_detected') and 
+                integrated_data.get('hands_detected')):
+                
+                face_center = integrated_data.get('face_center')
+                hand_positions = integrated_data.get('hand_positions', [])
+                
+                if face_center and hand_positions:
+                    for hand_pos in hand_positions:
+                        # 2D距離計算
+                        distance = np.sqrt(
+                            (face_center[0] - hand_pos[0])**2 + 
+                            (face_center[1] - hand_pos[1])**2
+                        )
+                        
+                        if distance < 0.3:  # 正規化座標での閾値
+                            interaction['hand_near_face'] = True
+                            interaction['face_hand_proximity'] = True
+            
+            # ジェスチャー活性状態
+            gestures = integrated_data.get('hand_gestures', [])
+            if gestures:
+                interaction['gesture_active'] = True
+                
+                # 指差しジェスチャーの特別処理
+                for gesture in gestures:
+                    if gesture['type'] == 'point':
+                        interaction['pointing_at_face'] = True
+            
+            return interaction
+            
+        except Exception as e:
+            self.logger.error(f"相互作用分析エラー: {e}")
+            return {}
+    
+    def _adjust_quality_settings(self):
+        """品質設定調整"""
+        try:
+            quality_configs = {
+                'low': {
+                    'frame_skip_max': 3,
+                    'detection_confidence': 0.6,
+                    'refine_landmarks': False
+                },
+                'medium': {
+                    'frame_skip_max': 2,
+                    'detection_confidence': 0.7,
+                    'refine_landmarks': True
+                },
+                'high': {
+                    'frame_skip_max': 1,
+                    'detection_confidence': 0.8,
+                    'refine_landmarks': True
+                }
+            }
+            
+            config = quality_configs.get(self.quality_level, quality_configs['medium'])
+            self.frame_skip_max = config['frame_skip_max']
+            
+        except Exception as e:
+            self.logger.error(f"品質設定調整エラー: {e}")
+    
+    def _adjust_performance(self):
+        """適応的パフォーマンス調整"""
+        try:
+            if len(self.processing_times) >= 10:
+                avg_time = sum(self.processing_times) / len(self.processing_times)
+                
+                # 処理時間が長い場合はフレームスキップ増加
+                if avg_time > 0.05:  # 50ms超過
+                    self.frame_skip = min(self.frame_skip_max, self.frame_skip + 1)
+                elif avg_time < 0.02:  # 20ms未満
+                    self.frame_skip = max(0, self.frame_skip - 1)
+                    
+        except Exception as e:
+            self.logger.error(f"パフォーマンス調整エラー: {e}")
+    
+    def get_debug_info(self) -> Dict[str, Any]:
+        """デバッグ情報取得"""
+        try:
+            result = self.last_detection_result
+            
+            debug_info = {
+                'Face': 'YES' if result.get('face_detected') else 'NO',
+                'Hands': 'YES' if result.get('hands_detected') else 'NO',
+                'Face Distance': f"{result.get('face_distance', 0):.3f}",
+                'Hand Count': result.get('hand_count', 0),
+                'Frame Skip': self.frame_skip,
+                'Quality Level': self.quality_level,
+                'GPU Available': self.gpu_processor.is_gpu_available()
+            }
+            
+            # パフォーマンス情報
+            if self.processing_times:
+                avg_time = sum(self.processing_times) / len(self.processing_times)
+                debug_info['Avg Processing Time'] = f"{avg_time:.3f}s"
+                debug_info['Est FPS'] = f"{1/avg_time:.1f}" if avg_time > 0 else "N/A"
+            
+            return debug_info
+            
+        except Exception as e:
+            self.logger.error(f"デバッグ情報取得エラー: {e}")
+            return {}
+    
+    def get_performance_stats(self) -> Dict[str, float]:
+        """パフォーマンス統計取得"""
+        try:
+            if not self.processing_times:
+                return {}
+            
+            times = list(self.processing_times)
+            return {
+                'avg_processing_time': sum(times) / len(times),
+                'max_processing_time': max(times),
+                'min_processing_time': min(times),
+                'frame_skip_level': self.frame_skip,
+                'fps_estimate': 1 / (sum(times) / len(times)) if times else 0
+            }
+            
+        except Exception as e:
+            self.logger.error(f"パフォーマンス統計エラー: {e}")
+            return {}
+    
+    def set_quality_level(self, level: str):
+        """品質レベル設定"""
+        try:
+            if level in ['low', 'medium', 'high']:
+                self.quality_level = level
+                self._adjust_quality_settings()
+                self.logger.info(f"品質レベルを{level}に設定しました")
+            else:
+                self.logger.warning(f"無効な品質レベル: {level}")
+                
+        except Exception as e:
+            self.logger.error(f"品質レベル設定エラー: {e}")
     
     def cleanup(self):
         """リソース解放"""
-        self.face_detector.cleanup()
-        self.hand_detector.cleanup()
-        print("Vision Processor リソース解放完了")
-
-# テスト実行用
-if __name__ == "__main__":
-    print("🔍 Vision Processor 統合テスト開始...")
-    
-    # テスト設定
-    config = {
-        'ai_processing': {
-            'vision': {
-                'face_detection': {
-                    'max_num_faces': 1,
-                    'refine_landmarks': True,
-                    'min_detection_confidence': 0.7
-                },
-                'hand_detection': {
-                    'max_num_hands': 2,
-                    'min_detection_confidence': 0.7
-                }
-            },
-            'emotion': {
-                'smoothing_window': 10,
-                'confidence_threshold': 0.6
-            }
-        },
-        'debug_mode': True
-    }
-    
-    processor = VisionProcessor(config)
-    
-    # カメラテスト
-    cap = cv2.VideoCapture(0)
-    if not cap.isOpened():
-        print("❌ カメラを開けません")
-        exit()
-    
-    print("🎬 統合テスト開始（C: キャリブレーション, ESC: 終了）...")
-    
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        
-        # 統合処理
-        result = processor.process_frame(frame)
-        
-        # 結果描画
-        output_frame = processor.draw_all_results(
-            frame, result, 
-            show_face=True, show_hands=True, show_emotion=True
-        )
-        
-        # 表示
-        cv2.imshow('Vision Processor Test', output_frame)
-        
-        key = cv2.waitKey(1) & 0xFF
-        if key == 27:  # ESC
-            break
-        elif key == ord('c'):  # キャリブレーション
-            processor.calibrate_emotion_baseline()
-    
-    cap.release()
-    cv2.destroyAllWindows()
-    
-    # 統計表示
-    stats = processor.get_performance_stats()
-    print(f"📊 総合性能統計:")
-    for key, value in stats.items():
-        print(f"  {key}: {value}")
-    
-    processor.cleanup()
-    print("✅ Vision Processor 統合テスト完了")
+        try:
+            if self.face_detector:
+                self.face_detector.cleanup()
+            if self.hand_detector:
+                self.hand_detector.cleanup()
+            if self.gpu_processor:
+                self.gpu_processor.cleanup()
+            
+            self.logger.info("統合画像処理エンジンがクリーンアップされました")
+            
+        except Exception as e:
+            self.logger.error(f"統合画像処理エンジンクリーンアップエラー: {e}")

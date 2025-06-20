@@ -1,13 +1,32 @@
-# 基本依存関係
-opencv-python==4.9.0
+# Aqua Mirror - 依存関係リスト（更新版）
+
+# コンピュータビジョン・AI処理
+opencv-python==4.9.0.80
 mediapipe==0.10.11
-pygame==2.5.2
 numpy==1.26.4
-urllib3
 
-# システム監視
-psutil>=5.9.0
+# ゲーム・グラフィックス
+pygame==2.5.2
 
-# 開発・デバッグ用
-pytest>=7.0.0
-pytest-cov>=4.0.0
+# GPU加速（オプション）
+# CUDA環境がある場合は以下をアンコメント
+opencv-contrib-python==4.9.0.80
+
+# ログ・ユーティリティ
+# 標準ライブラリを使用（追加インストール不要）
+
+# 開発・テスト用（オプション）
+pytest==7.4.4
+pytest-cov==4.1.0
+
+# パフォーマンス監視（オプション）
+psutil==5.9.8
+
+# 音響処理（将来的な拡張用）
+pyaudio==0.2.11
+
+# 設定管理
+# 標準ライブラリのjsonを使用
+
+# その他ユーティリティ
+pathlib2==2.3.7; python_version < "3.4"

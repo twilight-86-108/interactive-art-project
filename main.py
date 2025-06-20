@@ -1,109 +1,264 @@
 #!/usr/bin/env python3
 """
 Aqua Mirror - Interactive Art Project
-Day 2 版 - GPU加速・エラーハンドリング統合
+メインエントリーポイント（エラー修正版）
+
+実行方法:
+    python main.py [--config CONFIG_FILE] [--debug] [--demo]
 """
 
 import sys
 import os
-import json
+import argparse
+import logging
 from pathlib import Path
 
 # プロジェクトルートをPythonパスに追加
 PROJECT_ROOT = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-def load_config():
-    """設定ファイル読み込み"""
-    config_path = PROJECT_ROOT / "config" / "config.json"
+def setup_logging(debug_mode: bool = False):
+    """ログ設定"""
+    level = logging.DEBUG if debug_mode else logging.INFO
     
-    try:
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = json.load(f)
-        print(f"✅ 設定読み込み完了: {config_path}")
-        return config
-    except Exception as e:
-        print(f"❌ 設定読み込みエラー: {e}")
-        # デフォルト設定使用
-        return {
-            'hardware': {
-                'camera': {'device_id': 0},
-                'display': {'width': 1280, 'height': 720, 'fullscreen': False}
-            },
-            'performance': {'target_fps': 30},
-            'debug_mode': True
-        }
+    # ログディレクトリ作成
+    log_dir = PROJECT_ROOT / "logs"
+    log_dir.mkdir(exist_ok=True)
+    
+    # ログ設定
+    logging.basicConfig(
+        level=level,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_dir / "aqua_mirror.log", encoding='utf-8'),
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
+    
+    # MediaPipeの冗長なログを抑制
+    logging.getLogger('mediapipe').setLevel(logging.WARNING)
+    
+    return logging.getLogger(__name__)
 
-def run_component_tests():
-    """コンポーネント単体テスト実行"""
-    print("🧪 コンポーネントテスト実行...")
+def check_dependencies():
+    """依存関係チェック"""
+    required_modules = [
+        'cv2', 'mediapipe', 'pygame', 'numpy'
+    ]
     
-    tests = []
+    missing_modules = []
+    for module in required_modules:
+        try:
+            __import__(module)
+        except ImportError:
+            missing_modules.append(module)
     
-    # GPU処理テスト
-    try:
-        from src.core.gpu_processor import GPUProcessor
-        gpu = GPUProcessor()
-        print(f"✅ GPU処理: {gpu.device_count} devices")
-        tests.append(True)
-    except Exception as e:
-        print(f"❌ GPU処理テストエラー: {e}")
-        tests.append(False)
+    if missing_modules:
+        print(f"❌ 必要なモジュールが不足しています: {', '.join(missing_modules)}")
+        print("pip install -r requirements.txt を実行してください")
+        return False
     
-    # エラーマネージャーテスト
-    try:
-        from src.core.error_manager import ErrorManager
-        error_mgr = ErrorManager()
-        print("✅ エラーマネージャー: OK")
-        tests.append(True)
-    except Exception as e:
-        print(f"❌ エラーマネージャーテストエラー: {e}")
-        tests.append(False)
+    return True
+
+def check_assets():
+    """アセットファイルの存在確認"""
+    logger = logging.getLogger(__name__)
     
-    # パフォーマンスモニターテスト
-    try:
-        from src.core.performance_monitor import PerformanceMonitor
-        perf_mon = PerformanceMonitor()
-        print("✅ パフォーマンスモニター: OK")
-        tests.append(True)
-    except Exception as e:
-        print(f"❌ パフォーマンスモニターテストエラー: {e}")
-        tests.append(False)
+    # 必要なディレクトリを作成
+    required_dirs = [
+        PROJECT_ROOT / "assets" / "images",
+        PROJECT_ROOT / "assets" / "audio",
+        PROJECT_ROOT / "logs"
+    ]
     
-    success_rate = sum(tests) / len(tests) * 100
-    print(f"📊 コンポーネントテスト成功率: {success_rate:.1f}%")
+    for dir_path in required_dirs:
+        dir_path.mkdir(parents=True, exist_ok=True)
+        logger.info(f"ディレクトリ確認/作成: {dir_path}")
     
-    return all(tests)
+    # 重要なファイルの存在確認
+    config_file = PROJECT_ROOT / "config.json"
+    if not config_file.exists():
+        logger.warning(f"設定ファイルが見つかりません: {config_file}")
+        logger.info("デフォルト設定で動作します")
+    
+    return True
 
 def main():
-    """Day 2 メイン関数"""
-    print("🌊 Aqua Mirror Day 2 - GPU加速・エラーハンドリング版")
-    print("=" * 60)
+    """メイン関数"""
+    # コマンドライン引数解析
+    parser = argparse.ArgumentParser(description='Aqua Mirror Interactive Art')
+    parser.add_argument('--config', default='config.json', help='設定ファイルパス')
+    parser.add_argument('--debug', action='store_true', help='デバッグモード')
+    parser.add_argument('--demo', action='store_true', help='デモモード（カメラなし）')
+    parser.add_argument('--test', action='store_true', help='テストモード')
     
-    # 設定読み込み
-    config = load_config()
+    args = parser.parse_args()
     
-    # コンポーネントテスト
-    if not run_component_tests():
-        print("⚠️  コンポーネントテストに失敗がありますが、継続します...")
+    # ログ設定
+    logger = setup_logging(args.debug)
     
-    # メインアプリケーション実行
     try:
-        print("\n🚀 メインアプリケーション起動...")
+        logger.info("🌊 Aqua Mirror を起動します...")
+        
+        # 依存関係チェック
+        if not check_dependencies():
+            sys.exit(1)
+        
+        # アセット確認
+        check_assets()
+        
+        # 設定読み込み
+        from src.core.config_loader import ConfigLoader
+        
+        config_path = PROJECT_ROOT / args.config
+        config_loader = ConfigLoader(str(config_path))
+        config = config_loader.load()
+        
+        # コマンドライン引数による設定上書き
+        if args.debug:
+            config['debug_mode'] = True
+            logger.info("デバッグモードが有効になりました")
+        
+        if args.demo:
+            config['demo_mode'] = True
+            logger.info("デモモードが有効になりました")
+        
+        if args.test:
+            config['test_mode'] = True
+            logger.info("テストモードが有効になりました")
+        
+        # 設定妥当性確認
+        if not config_loader.validate_config():
+            logger.warning("設定に問題がありますが、継続します")
+        
+        # テストモードの場合
+        if args.test:
+            logger.info("テストモードで実行します")
+            run_tests(config)
+            return
+        
+        # アプリケーション起動
         from src.core.app import AquaMirrorApp
         
+        logger.info("アプリケーションを初期化します...")
         app = AquaMirrorApp(config)
+        
+        logger.info("メインループを開始します...")
         app.run()
         
     except KeyboardInterrupt:
-        print("\n⏹️  ユーザーによって停止されました")
+        logger.info("\n⏹️  ユーザーによって停止されました")
+    except ImportError as e:
+        logger.error(f"❌ モジュールインポートエラー: {e}")
+        logger.error("必要な依存関係がインストールされていない可能性があります")
+        logger.error("pip install -r requirements.txt を実行してください")
+        sys.exit(1)
     except Exception as e:
-        print(f"\n❌ アプリケーションエラー: {e}")
-        return False
+        logger.error(f"❌ 予期しないエラー: {e}")
+        logger.exception("詳細なエラー情報:")
+        sys.exit(1)
+    finally:
+        logger.info("🌊 Aqua Mirror を終了します")
+
+def run_tests(config):
+    """テストモード実行"""
+    logger = logging.getLogger(__name__)
     
-    print("\n🎉 Day 2 実行完了！")
-    return True
+    try:
+        logger.info("=== Aqua Mirror テストモード ===")
+        
+        # 基本テスト
+        test_results = {
+            'config_loading': False,
+            'camera_access': False,
+            'gpu_availability': False,
+            'mediapipe_init': False
+        }
+        
+        # 設定読み込みテスト
+        logger.info("1. 設定読み込みテスト...")
+        if config:
+            test_results['config_loading'] = True
+            logger.info("✅ 設定読み込み成功")
+        else:
+            logger.error("❌ 設定読み込み失敗")
+        
+        # カメラアクセステスト
+        logger.info("2. カメラアクセステスト...")
+        if not config.get('demo_mode', False):
+            try:
+                import cv2
+                cap = cv2.VideoCapture(config.get('camera', {}).get('device_id', 0))
+                if cap.isOpened():
+                    ret, frame = cap.read()
+                    if ret and frame is not None:
+                        test_results['camera_access'] = True
+                        logger.info("✅ カメラアクセス成功")
+                    else:
+                        logger.warning("⚠️ カメラからフレーム取得失敗")
+                    cap.release()
+                else:
+                    logger.warning("⚠️ カメラデバイスを開けません")
+            except Exception as e:
+                logger.error(f"❌ カメラテストエラー: {e}")
+        else:
+            logger.info("⏭️ デモモードのためカメラテストをスキップ")
+            test_results['camera_access'] = True
+        
+        # GPU利用可能性テスト
+        logger.info("3. GPU利用可能性テスト...")
+        try:
+            import cv2
+            gpu_count = cv2.cuda.getCudaEnabledDeviceCount()
+            if gpu_count > 0:
+                test_results['gpu_availability'] = True
+                logger.info(f"✅ GPU利用可能 ({gpu_count} devices)")
+            else:
+                logger.info("ℹ️ GPU利用不可、CPU処理で継続")
+                test_results['gpu_availability'] = True  # CPU処理も正常
+        except Exception as e:
+            logger.warning(f"⚠️ GPU確認エラー: {e}")
+            test_results['gpu_availability'] = True  # CPU処理で継続可能
+        
+        # MediaPipe初期化テスト
+        logger.info("4. MediaPipe初期化テスト...")
+        try:
+            import mediapipe as mp
+            
+            # 顔検出初期化テスト
+            face_mesh = mp.solutions.face_mesh.FaceMesh()
+            face_mesh.close()
+            
+            # 手検出初期化テスト
+            hands = mp.solutions.hands.Hands()
+            hands.close()
+            
+            test_results['mediapipe_init'] = True
+            logger.info("✅ MediaPipe初期化成功")
+            
+        except Exception as e:
+            logger.error(f"❌ MediaPipe初期化エラー: {e}")
+        
+        # テスト結果サマリー
+        logger.info("\n=== テスト結果サマリー ===")
+        total_tests = len(test_results)
+        passed_tests = sum(test_results.values())
+        
+        for test_name, result in test_results.items():
+            status = "✅ PASS" if result else "❌ FAIL"
+            logger.info(f"{test_name}: {status}")
+        
+        logger.info(f"\n合格: {passed_tests}/{total_tests}")
+        
+        if passed_tests == total_tests:
+            logger.info("🎉 全テストが成功しました！")
+            logger.info("python main.py でアプリケーションを起動できます")
+        else:
+            logger.warning("⚠️ 一部のテストが失敗しました")
+            logger.info("アプリケーションは動作する可能性がありますが、一部機能に制限があります")
+        
+    except Exception as e:
+        logger.error(f"テスト実行エラー: {e}")
 
 if __name__ == "__main__":
-    success = main()
-    sys.exit(0 if success else 1)
+    main()

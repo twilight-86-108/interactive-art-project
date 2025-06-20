@@ -1,154 +1,116 @@
-# src/core/app.py を完全修正
+# src/app.py
 import pygame
-import sys
 import time
-import cv2
-import numpy as np
-from typing import Optional, Any
+import sys
+import logging
+from enum import Enum
+from typing import Dict, Any, Optional
+from collections import deque
 
-from .camera_manager import CameraManager
-from .gpu_processor import GPUProcessor
-from .error_manager import ErrorManager, ErrorSeverity
-from .performance_monitor import PerformanceMonitor
+# コンポーネントのインポート
+from core.config_loader import ConfigLoader
+from vision.vision_processor import VisionProcessor
+from emotion.emotion_analyzer import EmotionAnalyzer, Emotion
+from scene import SceneManager
+
+class AppState(Enum):
+    """アプリケーション状態の定義"""
+    STANDBY = "standby"
+    RECOGNITION = "recognition"
+    INTERACTION = "interaction"
+    EXPERIENCE_END = "experience_end"
+    ERROR = "error"
 
 class AquaMirrorApp:
-    """Aqua Mirror メインアプリケーション（エラー修正版）"""
+    """メインアプリケーションクラス（エラー修正版）"""
     
-    def __init__(self, config: dict):
+    def __init__(self, config: Dict[str, Any]):
         self.config = config
+        self.logger = logging.getLogger(__name__)
+        
+        # アプリケーション状態
         self.running = True
-        self.demo_mode = False
-        self.initialization_failed = False
+        self.clock = pygame.time.Clock()
+        self.current_state = AppState.STANDBY
+        self.state_timer = 0
+        self.last_detection_time = 0
         
-        # コンポーネント（初期値をNoneに設定）
-        self.camera_manager: Optional[CameraManager] = None
-        self.gpu_processor: Optional[GPUProcessor] = None
-        self.error_manager: Optional[ErrorManager] = None
-        self.performance_monitor: Optional[PerformanceMonitor] = None
+        # パフォーマンス管理
+        self.target_fps = config.get('performance', {}).get('target_fps', 30)
+        self.frame_times = deque(maxlen=60)
         
-        # Pygame関連（初期値をNoneに設定）
-        self.screen: Optional[pygame.Surface] = None
-        self.clock: Optional[pygame.time.Clock] = None
-        self.font: Optional[pygame.font.Font] = None
+        # デバッグ・デモモード
+        self.debug_mode = config.get('debug_mode', False)
+        self.demo_mode = config.get('demo_mode', False)
         
-        # 状態管理
-        self.current_frame: Optional[np.ndarray] = None
-        self.frame_count = 0
-        self.debug_mode = config.get('debug_mode', True)
+        # コンポーネント参照
+        self.vision_processor = None
+        self.emotion_analyzer = None
+        self.scene_manager = None
+        self.camera = None
         
-        print("🌊 Aqua Mirror App 初期化開始...")
-        self._safe_initialize()
+        # デモ用データ
+        self.demo_data = self._create_demo_data() if self.demo_mode else None
+        self.demo_index = 0
+        
+        # 初期化
+        self._initialize_components()
+        
+        self.logger.info("Aqua Mirror アプリケーションが初期化されました")
     
-    def _safe_initialize(self):
-        """安全な初期化（エラー処理付き）"""
+    def _initialize_components(self):
+        """コンポーネント初期化"""
         try:
-            # エラーマネージャー初期化（最優先）
-            self._initialize_error_manager()
-            
-            # パフォーマンスモニター初期化
-            self._initialize_performance_monitor()
-            
-            # GPU処理初期化
-            self._initialize_gpu_processor()
-            
             # Pygame初期化
-            self._initialize_pygame()
+            self._init_pygame()
             
-            # カメラ初期化
-            self._initialize_camera()
+            # カメラ初期化（デモモードでない場合）
+            if not self.demo_mode:
+                self._init_camera()
             
-            print("✅ アプリケーション初期化完了")
-            
-        except Exception as e:
-            print(f"❌ 重大な初期化エラー: {e}")
-            self.initialization_failed = True
-            self._enable_safe_mode()
-    
-    def _initialize_error_manager(self):
-        """エラーマネージャー初期化"""
-        try:
-            self.error_manager = ErrorManager()
-        except Exception as e:
-            print(f"⚠️  エラーマネージャー初期化失敗: {e}")
-            self.error_manager = None
-    
-    def _initialize_performance_monitor(self):
-        """パフォーマンスモニター初期化"""
-        try:
-            self.performance_monitor = PerformanceMonitor()
-            if self.performance_monitor:
-                self.performance_monitor.start_monitoring()
-        except Exception as e:
-            print(f"⚠️  パフォーマンスモニター初期化失敗: {e}")
-            self.performance_monitor = None
-    
-    def _initialize_gpu_processor(self):
-        """GPU処理初期化"""
-        try:
-            self.gpu_processor = GPUProcessor()
-        except Exception as e:
-            print(f"⚠️  GPU処理初期化失敗: {e}")
-            self.gpu_processor = None
-    
-    def _safe_error_handle(self, error: Exception, severity: ErrorSeverity = ErrorSeverity.ERROR):
-        """安全なエラーハンドリング"""
-        if self.error_manager:
+            # AI処理コンポーネント初期化
             try:
-                self.error_manager.handle_error(error, severity, self)
-            except:
-                print(f"⚠️  エラーハンドリング失敗: {error}")
-        else:
-            print(f"⚠️  エラー（マネージャー無効）: {error}")
+                self.vision_processor = VisionProcessor(self.config)
+                self.logger.info("VisionProcessor初期化完了")
+            except Exception as e:
+                self.logger.error(f"VisionProcessor初期化エラー: {e}")
+                self.vision_processor = None
+            
+            try:
+                self.emotion_analyzer = EmotionAnalyzer()
+                self.logger.info("EmotionAnalyzer初期化完了")
+            except Exception as e:
+                self.logger.error(f"EmotionAnalyzer初期化エラー: {e}")
+                self.emotion_analyzer = None
+            
+            # シーンマネージャー初期化
+            try:
+                display_config = self.config.get('display', {})
+                self.scene_manager = SceneManager(
+                    display_config.get('width', 1920),
+                    display_config.get('height', 1080),
+                    self.config
+                )
+                self.logger.info("SceneManager初期化完了")
+            except Exception as e:
+                self.logger.error(f"SceneManager初期化エラー: {e}")
+                self.scene_manager = None
+            
+            self.logger.info("コンポーネント初期化が完了しました")
+            
+        except Exception as e:
+            self.logger.error(f"コンポーネント初期化エラー: {e}")
+            raise
     
-    def _get_camera_config(self) -> dict:
-        """カメラ設定取得（フォールバック対応）"""
-        try:
-            # 新構造の場合
-            if 'hardware' in self.config and 'camera' in self.config['hardware']:
-                return self.config['hardware']['camera']
-            # 旧構造の場合
-            elif 'camera' in self.config:
-                return self.config['camera']
-            # デフォルト設定
-            else:
-                return {'device_id': 0}
-        except:
-            return {'device_id': 0}
-    
-    def _get_display_config(self) -> dict:
-        """ディスプレイ設定取得（フォールバック対応）"""
-        try:
-            # 新構造の場合
-            if 'hardware' in self.config and 'display' in self.config['hardware']:
-                return self.config['hardware']['display']
-            # 旧構造の場合
-            elif 'display' in self.config:
-                return self.config['display']
-            # デフォルト設定
-            else:
-                return {'width': 1280, 'height': 720, 'fullscreen': False}
-        except:
-            return {'width': 1280, 'height': 720, 'fullscreen': False}
-    
-    def _get_performance_config(self) -> dict:
-        """パフォーマンス設定取得（フォールバック対応）"""
-        try:
-            if 'performance' in self.config:
-                return self.config['performance']
-            else:
-                return {'target_fps': 30}
-        except:
-            return {'target_fps': 30}
-    
-    def _initialize_pygame(self):
-        """Pygame初期化（安全版）"""
+    def _init_pygame(self):
+        """Pygame初期化"""
         try:
             pygame.init()
+            pygame.mixer.init()
             
-            # 画面設定（フォールバック対応）
-            display_config = self._get_display_config()
-            width = display_config.get('width', 1280)
-            height = display_config.get('height', 720)
+            display_config = self.config.get('display', {})
+            width = display_config.get('width', 1920)
+            height = display_config.get('height', 1080)
             fullscreen = display_config.get('fullscreen', False)
             
             flags = pygame.DOUBLEBUF | pygame.HWSURFACE
@@ -156,84 +118,84 @@ class AquaMirrorApp:
                 flags |= pygame.FULLSCREEN
             
             self.screen = pygame.display.set_mode((width, height), flags)
-            pygame.display.set_caption("Aqua Mirror - Day 2")
+            pygame.display.set_caption("Aqua Mirror - Interactive Art Experience")
             
-            # クロック・フォント初期化
-            self.clock = pygame.time.Clock()
-            self.font = pygame.font.Font(None, 36)
+            # フォント初期化
+            pygame.font.init()
             
-            print(f"✅ Pygame初期化完了 ({width}x{height})")
+            self.logger.info(f"Pygame初期化完了: {width}x{height}, fullscreen={fullscreen}")
             
         except Exception as e:
-            print(f"❌ Pygame初期化エラー: {e}")
-            self._safe_error_handle(e, ErrorSeverity.CRITICAL)
-            # フォールバック：最小設定で再試行
-            try:
-                pygame.init()
-                self.screen = pygame.display.set_mode((800, 600))
-                self.clock = pygame.time.Clock()
-                self.font = pygame.font.Font(None, 24)
-                print("✅ Pygame最小設定で初期化完了")
-            except Exception as fallback_error:
-                print(f"❌ Pygame最小設定も失敗: {fallback_error}")
-                self.screen = None
-                self.clock = None
-                self.font = None
+            self.logger.error(f"Pygame初期化エラー: {e}")
+            raise
     
-    def _initialize_camera(self):
-        """カメラ初期化（安全版）"""
+    def _init_camera(self):
+        """カメラ初期化"""
         try:
-            camera_config = self._get_camera_config()
-            device_id = camera_config.get('device_id', 0)
+            import cv2
             
-            self.camera_manager = CameraManager(device_id)
+            # カメラマネージャー作成（configオブジェクトを渡す）
+            self.camera = CameraManager(self.config)
             
-            if not self.camera_manager.initialize():
-                raise RuntimeError("カメラ初期化失敗")
+            if not self.camera.initialize():
+                raise RuntimeError("カメラの初期化に失敗しました")
             
-            print("✅ カメラ初期化完了")
+            self.camera.start_capture()
+            self.logger.info("カメラが初期化されました")
             
+        except ImportError:
+            self.logger.error("CameraManagerのインポートに失敗しました。内蔵版を使用します")
+            self.camera = CameraManager(self.config)
+            if not self.camera.initialize():
+                self.logger.warning("デモモードに切り替えます")
+                self.demo_mode = True
+                self.demo_data = self._create_demo_data()
         except Exception as e:
-            print(f"⚠️  カメラ初期化エラー: {e}")
-            self._safe_error_handle(e, ErrorSeverity.ERROR)
-            self.camera_manager = None
-            self.enable_demo_mode()
+            self.logger.error(f"カメラ初期化エラー: {e}")
+            self.logger.warning("デモモードに切り替えます")
+            self.demo_mode = True
+            self.demo_data = self._create_demo_data()
     
-    def _enable_safe_mode(self):
-        """セーフモード有効化"""
-        print("🛡️  セーフモード有効化")
-        self.demo_mode = True
-        
-        # 最小限のPygame設定
-        if not self.screen:
-            try:
-                pygame.init()
-                self.screen = pygame.display.set_mode((800, 600))
-                self.clock = pygame.time.Clock()
-                self.font = pygame.font.Font(None, 24)
-            except:
-                pass
-    
-    def enable_demo_mode(self):
-        """デモモード有効化（カメラなし動作）"""
-        self.demo_mode = True
-        print("🎭 デモモード有効化")
-    
-    def reduce_quality(self):
-        """品質設定削減"""
-        print("📉 品質設定を下げました")
-    
-    def adjust_performance(self):
-        """パフォーマンス調整"""
-        print("⚡ パフォーマンス調整実行")
+    def _create_demo_data(self) -> list:
+        """デモ用データ作成"""
+        return [
+            {
+                'face_detected': True,
+                'face_center': (0.5, 0.4, 0.5),
+                'hands_detected': True,
+                'hand_positions': [(0.3, 0.6), (0.7, 0.6)],
+                'emotion': Emotion.HAPPY,
+                'duration': 3.0
+            },
+            {
+                'face_detected': True,
+                'face_center': (0.6, 0.3, 0.3),
+                'hands_detected': False,
+                'hand_positions': [],
+                'emotion': Emotion.SURPRISED,
+                'duration': 2.5
+            },
+            {
+                'face_detected': True,
+                'face_center': (0.4, 0.5, 0.7),
+                'hands_detected': True,
+                'hand_positions': [(0.5, 0.5)],
+                'emotion': Emotion.SAD,
+                'duration': 2.0
+            },
+            {
+                'face_detected': False,
+                'face_center': None,
+                'hands_detected': False,
+                'hand_positions': [],
+                'emotion': Emotion.NEUTRAL,
+                'duration': 1.5
+            }
+        ]
     
     def run(self):
-        """メインループ実行（安全版）"""
-        if self.initialization_failed and not self.screen:
-            print("❌ 初期化が完全に失敗しました。アプリケーションを終了します。")
-            return
-        
-        print("🚀 メインループ開始...")
+        """メインループ実行"""
+        self.logger.info("メインループを開始します")
         
         try:
             while self.running:
@@ -242,260 +204,394 @@ class AquaMirrorApp:
                 # イベント処理
                 self._handle_events()
                 
-                # フレーム更新
-                self._update_frame()
+                # 状態更新
+                self._update()
                 
                 # 描画
                 self._render()
                 
-                # パフォーマンス記録
+                # パフォーマンス管理
                 frame_time = time.time() - frame_start
-                if self.performance_monitor:
-                    try:
-                        self.performance_monitor.record_frame_time(frame_time)
-                    except:
-                        pass
+                self.frame_times.append(frame_time)
                 
                 # FPS制御
-                if self.clock:
-                    try:
-                        performance_config = self._get_performance_config()
-                        target_fps = performance_config.get('target_fps', 30)
-                        self.clock.tick(target_fps)
-                    except:
-                        time.sleep(1.0 / 30)  # フォールバック：30FPS相当の待機
-                else:
-                    time.sleep(1.0 / 30)  # クロックがない場合のフォールバック
-                
-                self.frame_count += 1
+                self.clock.tick(self.target_fps)
                 
         except Exception as e:
-            print(f"❌ メインループエラー: {e}")
-            self._safe_error_handle(e, ErrorSeverity.CRITICAL)
+            self.logger.error(f"メインループエラー: {e}")
+            self.logger.exception("詳細なエラー情報:")
         finally:
             self._cleanup()
     
     def _handle_events(self):
-        """イベント処理（安全版）"""
-        try:
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    self.running = False
-                elif event.type == pygame.KEYDOWN:
-                    self._handle_key_event(event.key)
-        except:
-            # イベント処理エラーでも継続
-            pass
+        """イベント処理"""
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                self.running = False
+            elif event.type == pygame.KEYDOWN:
+                self._handle_key_event(event.key)
     
     def _handle_key_event(self, key):
-        """キーイベント処理（安全版）"""
-        try:
-            if key == pygame.K_ESCAPE:
-                self.running = False
-            elif key == pygame.K_d:
-                self.debug_mode = not self.debug_mode
-                print(f"🐛 デバッグモード: {'ON' if self.debug_mode else 'OFF'}")
-            elif key == pygame.K_f:
-                print("🖥️  フルスクリーン切替（未実装）")
-            elif key == pygame.K_r:
-                # カメラリセット
-                if self.camera_manager:
-                    try:
-                        self.camera_manager.cleanup()
-                        self.camera_manager.initialize()
-                        print("📹 カメラリセット完了")
-                    except Exception as e:
-                        self._safe_error_handle(e, ErrorSeverity.ERROR)
-        except:
-            pass
+        """キーイベント処理"""
+        if key == pygame.K_ESCAPE:
+            self.running = False
+        elif key == pygame.K_F1:
+            self.debug_mode = not self.debug_mode
+            self.logger.info(f"デバッグモード: {'ON' if self.debug_mode else 'OFF'}")
+        elif key == pygame.K_F2:
+            self.demo_mode = not self.demo_mode
+            self.logger.info(f"デモモード: {'ON' if self.demo_mode else 'OFF'}")
+        elif key == pygame.K_F3:
+            # シーンエフェクトクリア
+            if self.scene_manager:
+                self.scene_manager.clear_effects()
+                self.logger.info("エフェクトをクリアしました")
+        elif key == pygame.K_SPACE:
+            # 状態リセット
+            self.current_state = AppState.STANDBY
+            self.logger.info("状態をリセットしました")
     
-    def _update_frame(self):
-        """フレーム更新（安全版）"""
+    def _update(self):
+        """状態更新"""
         try:
-            if self.demo_mode:
-                # デモモード: ランダムカラー生成
-                display_config = self._get_display_config()
-                width = display_config.get('width', 1280)
-                height = display_config.get('height', 720)
-                self.current_frame = np.random.randint(0, 255, (height//4, width//4, 3), dtype=np.uint8)
+            current_time = time.time()
             
-            elif self.camera_manager:
-                # カメラフレーム取得
-                frame = self.camera_manager.get_frame()
-                if frame is not None:
-                    # GPU処理でリサイズ
-                    display_config = self._get_display_config()
-                    target_width = display_config.get('width', 1280) // 2
-                    target_height = display_config.get('height', 720) // 2
-                    
-                    if self.gpu_processor:
-                        try:
-                            processed_frame = self.gpu_processor.resize_frame(
-                                frame, (target_width, target_height)
-                            )
-                            self.current_frame = processed_frame
-                        except Exception as gpu_error:
-                            # GPU処理失敗時はそのまま使用
-                            self.current_frame = cv2.resize(frame, (target_width, target_height))
-                    else:
-                        # GPU処理なしの場合
-                        self.current_frame = cv2.resize(frame, (target_width, target_height))
-                        
+            # 検出データ取得
+            if self.demo_mode:
+                detection_result = self._get_demo_detection_result()
+            else:
+                detection_result = self._get_real_detection_result()
+            
+            # 感情分析
+            current_emotion = Emotion.NEUTRAL
+            emotion_confidence = 0.0
+            
+            if (detection_result.get('face_detected') and 
+                detection_result.get('face_landmarks') and 
+                self.emotion_analyzer is not None):
+                try:
+                    current_emotion, emotion_confidence = self.emotion_analyzer.analyze_emotion(
+                        detection_result['face_landmarks']
+                    )
+                except Exception as e:
+                    self.logger.error(f"感情分析エラー: {e}")
+                    current_emotion = Emotion.NEUTRAL
+                    emotion_confidence = 0.0
+            
+            # 状態遷移の管理
+            self._update_state(detection_result, current_emotion, current_time)
+            
+            # シーンマネージャーに検出結果を渡す
+            if self.scene_manager:
+                self.scene_manager.update(detection_result, self.current_state)
+            
         except Exception as e:
-            self._safe_error_handle(e, ErrorSeverity.WARNING)
+            self.logger.error(f"状態更新エラー: {e}")
+    
+    def _get_real_detection_result(self):
+        """実際のカメラからの検出結果取得"""
+        try:
+            if not self.camera:
+                return {}
+            
+            # フレーム取得
+            frame = self.camera.get_frame()
+            if frame is None:
+                return {}
+            
+            # AI処理
+            if self.vision_processor is not None:
+                return self.vision_processor.process_frame(frame)
+            else:
+                self.logger.warning("VisionProcessorが利用できません")
+                return {}
+            
+        except Exception as e:
+            self.logger.error(f"リアル検出エラー: {e}")
+            return {}
+    
+    def _get_demo_detection_result(self):
+        """デモ用検出結果取得"""
+        try:
+            if not self.demo_data:
+                return {}
+            
+            # 時間ベースでデモデータを切り替え
+            current_time = time.time()
+            if not hasattr(self, 'demo_start_time'):
+                self.demo_start_time = current_time
+            
+            elapsed = current_time - self.demo_start_time
+            current_demo = self.demo_data[self.demo_index % len(self.demo_data)]
+            
+            if elapsed > current_demo['duration']:
+                self.demo_index += 1
+                self.demo_start_time = current_time
+                current_demo = self.demo_data[self.demo_index % len(self.demo_data)]
+            
+            # デモデータを検出結果形式に変換
+            return {
+                'face_detected': current_demo['face_detected'],
+                'face_center': current_demo['face_center'],
+                'face_landmarks': {'multi_face_landmarks': []} if current_demo['face_detected'] else None,
+                'hands_detected': current_demo['hands_detected'],
+                'hand_positions': current_demo['hand_positions'],
+                'hand_gestures': [],
+                'timestamp': current_time
+            }
+            
+        except Exception as e:
+            self.logger.error(f"デモ検出エラー: {e}")
+            return {}
+    
+    def _update_state(self, detection_result, current_emotion, current_time):
+        """状態遷移の管理"""
+        try:
+            face_detected = detection_result.get('face_detected', False)
+            hands_detected = detection_result.get('hands_detected', False)
+            face_distance = detection_result.get('face_distance', float('inf'))
+            
+            if self.current_state == AppState.STANDBY:
+                if face_detected:
+                    self.current_state = AppState.RECOGNITION
+                    self.state_timer = current_time
+                    self.logger.debug("状態変更: STANDBY -> RECOGNITION")
+            
+            elif self.current_state == AppState.RECOGNITION:
+                if not face_detected:
+                    # 顔が見つからなくなった場合、少し待ってからSTANDBYに戻る
+                    if current_time - self.last_detection_time > 3.0:
+                        self.current_state = AppState.STANDBY
+                        self.logger.debug("状態変更: RECOGNITION -> STANDBY")
+                else:
+                    self.last_detection_time = current_time
+                    
+                    # インタラクション条件の確認
+                    approach_threshold = self.config.get('interaction', {}).get('approach_threshold_z', 0.8)
+                    if face_distance < approach_threshold or hands_detected:
+                        self.current_state = AppState.INTERACTION
+                        self.logger.debug("状態変更: RECOGNITION -> INTERACTION")
+            
+            elif self.current_state == AppState.INTERACTION:
+                if not face_detected and not hands_detected:
+                    self.current_state = AppState.EXPERIENCE_END
+                    self.state_timer = current_time
+                    self.logger.debug("状態変更: INTERACTION -> EXPERIENCE_END")
+            
+            elif self.current_state == AppState.EXPERIENCE_END:
+                # 3秒後にSTANDBYに戻る
+                if current_time - self.state_timer > 3.0:
+                    self.current_state = AppState.STANDBY
+                    self.logger.debug("状態変更: EXPERIENCE_END -> STANDBY")
+            
+        except Exception as e:
+            self.logger.error(f"状態遷移エラー: {e}")
     
     def _render(self):
-        """描画処理（安全版）"""
-        if not self.screen:
-            return
-        
+        """描画処理"""
         try:
             # 背景クリア
-            self.screen.fill((0, 20, 40))  # 深い青色
+            self.screen.fill((0, 0, 0))
             
-            # カメラ画像表示
-            if self.current_frame is not None:
-                self._render_camera_frame()
+            # シーン描画
+            if self.scene_manager:
+                self.scene_manager.draw(self.screen)
             
-            # デバッグ情報表示
+            # デバッグ情報の描画
             if self.debug_mode:
                 self._render_debug_info()
+            
+            # デモモード表示
+            if self.demo_mode:
+                self._render_demo_overlay()
             
             # 画面更新
             pygame.display.flip()
             
         except Exception as e:
-            # 描画エラーでも継続
-            try:
-                if self.screen:
-                    self.screen.fill((100, 0, 0))  # エラー時は赤背景
-                    pygame.display.flip()
-            except:
-                pass
-    
-    def _render_camera_frame(self):
-        """カメラフレーム描画（安全版）"""
-        if not self.screen or self.current_frame is None:
-            return
-        
-        try:
-            # None チェック
-            if self.current_frame is None:
-                return
-            
-            # OpenCV BGR -> Pygame RGB 変換
-            frame_rgb = cv2.cvtColor(self.current_frame, cv2.COLOR_BGR2RGB)
-            
-            # Pygame サーフェス作成
-            frame_surface = pygame.surfarray.make_surface(frame_rgb.swapaxes(0, 1))
-            
-            # 画面中央に配置
-            screen_rect = self.screen.get_rect()
-            frame_rect = frame_surface.get_rect()
-            frame_rect.center = screen_rect.center
-            
-            self.screen.blit(frame_surface, frame_rect)
-            
-        except Exception as e:
-            self._safe_error_handle(e, ErrorSeverity.WARNING)
+            self.logger.error(f"描画エラー: {e}")
     
     def _render_debug_info(self):
-        """デバッグ情報描画（安全版）"""
-        if not self.screen or not self.font:
-            return
-        
+        """デバッグ情報の描画"""
         try:
+            font = pygame.font.Font(None, 24)
             y_offset = 10
-            line_height = 30
             
-            # 基本情報
-            fps = self.clock.get_fps() if self.clock else 0.0
-            fps_text = self.font.render(f"FPS: {fps:.1f}", True, (255, 255, 255))
+            # FPS表示
+            fps = self.clock.get_fps()
+            fps_text = font.render(f"FPS: {fps:.1f}", True, (255, 255, 255))
             self.screen.blit(fps_text, (10, y_offset))
-            y_offset += line_height
+            y_offset += 25
             
-            # フレーム数表示
-            frame_text = self.font.render(f"Frames: {self.frame_count}", True, (255, 255, 255))
-            self.screen.blit(frame_text, (10, y_offset))
-            y_offset += line_height
+            # 現在の状態表示
+            state_text = font.render(f"State: {self.current_state.value}", True, (255, 255, 255))
+            self.screen.blit(state_text, (10, y_offset))
+            y_offset += 25
             
-            # モード表示
-            mode = "Demo" if self.demo_mode else "Camera"
-            mode_text = self.font.render(f"Mode: {mode}", True, (255, 255, 255))
-            self.screen.blit(mode_text, (10, y_offset))
-            y_offset += line_height
+            # 検出情報表示
+            if self.vision_processor is not None:
+                debug_info = self.vision_processor.get_debug_info()
+                for key, value in debug_info.items():
+                    info_text = font.render(f"{key}: {value}", True, (255, 255, 255))
+                    self.screen.blit(info_text, (10, y_offset))
+                    y_offset += 25
+            else:
+                no_vision_text = font.render("VisionProcessor: Not Available", True, (255, 255, 0))
+                self.screen.blit(no_vision_text, (10, y_offset))
+                y_offset += 25
             
-            # GPU状態
-            gpu_status = "GPU" if (self.gpu_processor and self.gpu_processor.gpu_available) else "CPU"
-            gpu_text = self.font.render(f"Processing: {gpu_status}", True, (255, 255, 255))
-            self.screen.blit(gpu_text, (10, y_offset))
-            y_offset += line_height
+            # エフェクト数表示
+            if self.scene_manager:
+                effect_count = self.scene_manager.get_effect_count()
+                effect_text = font.render(f"Effects: {effect_count['total']}", True, (255, 255, 255))
+                self.screen.blit(effect_text, (10, y_offset))
+                y_offset += 25
             
-            # 初期化状態
-            if self.initialization_failed:
-                error_text = self.font.render("⚠️ セーフモード", True, (255, 255, 0))
-                self.screen.blit(error_text, (10, y_offset))
-                y_offset += line_height
-            
-            # パフォーマンス警告
-            if self.performance_monitor:
-                try:
-                    warnings = self.performance_monitor.check_performance_warnings()
-                    if warnings:
-                        warning_text = self.font.render(f"⚠️ {', '.join(warnings)}", True, (255, 255, 0))
-                        self.screen.blit(warning_text, (10, y_offset))
-                except:
-                    pass
-            
-            # キー操作ガイド
-            guide_y = self.screen.get_height() - 100
-            guides = [
-                "ESC: 終了",
-                "D: デバッグ切替",
-                "R: カメラリセット"
-            ]
-            
-            for i, guide in enumerate(guides):
-                guide_text = self.font.render(guide, True, (200, 200, 200))
-                self.screen.blit(guide_text, (10, guide_y + i * 25))
-                
         except Exception as e:
-            # デバッグ情報描画でエラーが出ても継続
-            pass
+            self.logger.error(f"デバッグ情報描画エラー: {e}")
+    
+    def _render_demo_overlay(self):
+        """デモモードオーバーレイ"""
+        try:
+            font = pygame.font.Font(None, 32)
+            demo_text = font.render("DEMO MODE", True, (255, 255, 0))
+            
+            # 右上に表示
+            text_rect = demo_text.get_rect()
+            x = self.screen.get_width() - text_rect.width - 20
+            y = 20
+            
+            # 背景
+            bg_rect = pygame.Rect(x - 10, y - 5, text_rect.width + 20, text_rect.height + 10)
+            pygame.draw.rect(self.screen, (0, 0, 0, 128), bg_rect)
+            
+            self.screen.blit(demo_text, (x, y))
+            
+        except Exception as e:
+            self.logger.error(f"デモオーバーレイ描画エラー: {e}")
     
     def _cleanup(self):
-        """リソース解放（安全版）"""
-        print("🧹 リソース解放中...")
-        
-        components = [
-            (self.performance_monitor, 'stop_monitoring'),
-            (self.camera_manager, 'cleanup'),
-            (self.gpu_processor, 'cleanup')
-        ]
-        
-        for component, method_name in components:
-            if component and hasattr(component, method_name):
-                try:
-                    getattr(component, method_name)()
-                except Exception as e:
-                    print(f"⚠️  {component.__class__.__name__} 解放エラー: {e}")
-        
+        """クリーンアップ処理"""
         try:
+            self.logger.info("アプリケーションをクリーンアップしています...")
+            
+            # コンポーネントのクリーンアップ
+            if self.vision_processor:
+                self.vision_processor.cleanup()
+            
+            if self.camera:
+                self.camera.cleanup()
+            
+            # Pygame終了
             pygame.quit()
-        except:
-            pass
-        
-        print("✅ リソース解放完了")
-
-# テスト実行用
-if __name__ == "__main__":
-    # テスト設定（両方の構造に対応）
-    test_config = {
-        'camera': {'device_id': 0},
-        'display': {'width': 1280, 'height': 720, 'fullscreen': False},
-        'performance': {'target_fps': 30},
-        'debug_mode': True
-    }
+            
+            self.logger.info("クリーンアップが完了しました")
+            
+        except Exception as e:
+            self.logger.error(f"クリーンアップエラー: {e}")
     
-    app = AquaMirrorApp(test_config)
-    app.run()
+    def get_performance_stats(self):
+        """パフォーマンス統計取得"""
+        try:
+            if not self.frame_times:
+                return {}
+            
+            avg_frame_time = sum(self.frame_times) / len(self.frame_times)
+            fps_estimate = 1.0 / avg_frame_time if avg_frame_time > 0 else 0
+            
+            return {
+                'fps': self.clock.get_fps(),
+                'fps_estimate': fps_estimate,
+                'avg_frame_time': avg_frame_time,
+                'current_state': self.current_state.value,
+                'demo_mode': self.demo_mode
+            }
+            
+        except Exception as e:
+            self.logger.error(f"パフォーマンス統計エラー: {e}")
+            return {}
+
+# CameraManager クラス（app.py内で定義）
+class CameraManager:
+    """簡易カメラマネージャー"""
+    
+    def __init__(self, config):
+        self.config = config
+        self.camera = None
+        self.logger = logging.getLogger(__name__)
+        self.capture_active = False
+        
+    def initialize(self):
+        """カメラ初期化"""
+        try:
+            import cv2
+            
+            camera_config = self.config.get('camera', {})
+            device_id = camera_config.get('device_id', 0)
+            
+            self.camera = cv2.VideoCapture(device_id)
+            
+            if not self.camera.isOpened():
+                return False
+            
+            # カメラ設定
+            width = camera_config.get('width', 1920)
+            height = camera_config.get('height', 1080)
+            fps = camera_config.get('fps', 30)
+            
+            self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+            self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+            self.camera.set(cv2.CAP_PROP_FPS, fps)
+            self.camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            
+            self.logger.info(f"カメラ初期化成功: {width}x{height}@{fps}fps")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"カメラ初期化エラー: {e}")
+            return False
+    
+    def start_capture(self):
+        """フレーム取得開始"""
+        try:
+            if self.camera and self.camera.isOpened():
+                self.capture_active = True
+                self.logger.info("カメラキャプチャを開始しました")
+                return True
+            else:
+                self.logger.warning("カメラが初期化されていません")
+                return False
+        except Exception as e:
+            self.logger.error(f"カメラキャプチャ開始エラー: {e}")
+            return False
+    
+    def stop_capture(self):
+        """フレーム取得停止"""
+        try:
+            self.capture_active = False
+            self.logger.info("カメラキャプチャを停止しました")
+        except Exception as e:
+            self.logger.error(f"カメラキャプチャ停止エラー: {e}")
+    
+    def get_frame(self):
+        """フレーム取得"""
+        try:
+            if not self.camera or not self.camera.isOpened() or not self.capture_active:
+                return None
+            
+            ret, frame = self.camera.read()
+            return frame if ret else None
+            
+        except Exception as e:
+            self.logger.error(f"フレーム取得エラー: {e}")
+            return None
+    
+    def cleanup(self):
+        """リソース解放"""
+        try:
+            self.stop_capture()
+            if self.camera:
+                self.camera.release()
+            self.logger.info("カメラがクリーンアップされました")
+        except Exception as e:
+            self.logger.error(f"カメラクリーンアップエラー: {e}")

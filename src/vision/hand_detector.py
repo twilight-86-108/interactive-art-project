@@ -1,349 +1,319 @@
+# src/vision/hand_detector.py
 import cv2
 import mediapipe as mp
 import numpy as np
-from typing import Dict, List, Optional, Tuple
-import time
+import logging
+from typing import Optional, Tuple, Dict, Any, List
 
 class HandDetector:
-    """MediaPipe Hands 統合検出器（Day 3版）"""
+    """手検出クラス（エラー修正版）"""
     
-    def __init__(self, config: dict):
+    def __init__(self, config: Dict[str, Any]):
         self.config = config
+        self.logger = logging.getLogger(__name__)
         
-        # MediaPipe Hands 初期化
+        # MediaPipe初期化
         self.mp_hands = mp.solutions.hands
         self.mp_drawing = mp.solutions.drawing_utils
-        self.mp_drawing_styles = mp.solutions.drawing_styles
-        
-        # Hands 設定
-        hand_config = config.get('ai_processing', {}).get('vision', {}).get('hand_detection', {})
-        
-        self.hands = self.mp_hands.Hands(
-            static_image_mode=False,
-            max_num_hands=hand_config.get('max_num_hands', 2),
-            min_detection_confidence=hand_config.get('min_detection_confidence', 0.7),
-            min_tracking_confidence=hand_config.get('min_tracking_confidence', 0.5),
-            model_complexity=hand_config.get('model_complexity', 1)
-        )
-        
-        # 手のランドマークインデックス定義
-        self.HAND_LANDMARKS = {
-            'wrist': 0,
-            'thumb': [1, 2, 3, 4],
-            'index': [5, 6, 7, 8],
-            'middle': [9, 10, 11, 12],
-            'ring': [13, 14, 15, 16],
-            'pinky': [17, 18, 19, 20]
-        }
-        
-        # 処理統計
-        self.detection_times = []
-        self.detection_count = 0
-        self.last_detection_result = None
-        
-        print("✅ Hand Detector 初期化完了")
-    
-    def detect_hands(self, frame: np.ndarray) -> Dict:
-        """手検出メイン処理"""
-        start_time = time.time()
         
         try:
-            # RGB変換（MediaPipe用）
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            # 設定取得（デフォルト値付き）
+            hand_config = config.get('detection', {})
             
-            # MediaPipe処理
+            self.hands = self.mp_hands.Hands(
+                static_image_mode=False,
+                max_num_hands=hand_config.get('max_num_hands', 2),
+                min_detection_confidence=hand_config.get('hand_detection_confidence', 0.7),
+                min_tracking_confidence=hand_config.get('min_tracking_confidence', 0.5)
+            )
+            
+            self.logger.info("手検出器が初期化されました")
+            
+        except Exception as e:
+            self.logger.error(f"手検出器初期化エラー: {e}")
+            self.hands = None
+    
+    def detect_hands(self, frame: np.ndarray) -> Optional[Dict[str, Any]]:
+        """手検出メイン関数"""
+        if frame is None or self.hands is None:
+            return None
+        
+        try:
+            # フレームがBGRの場合、RGBに変換
+            if len(frame.shape) == 3 and frame.shape[2] == 3:
+                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            else:
+                rgb_frame = frame
+            
+            # 手検出実行
             results = self.hands.process(rgb_frame)
             
-            # 結果解析
-            detection_result = self._analyze_detection_results(results, frame.shape)
-            
-            # 処理時間記録
-            processing_time = time.time() - start_time
-            self.detection_times.append(processing_time)
-            if len(self.detection_times) > 100:
-                self.detection_times.pop(0)
-            
-            self.detection_count += 1
-            self.last_detection_result = detection_result
-            
-            return detection_result
-            
+            if results.multi_hand_landmarks:
+                return self._process_hand_results(results, frame.shape)
+            else:
+                return None
+                
         except Exception as e:
-            print(f"⚠️  手検出エラー: {e}")
-            return self._get_empty_result()
+            self.logger.error(f"手検出エラー: {e}")
+            return None
     
-    def _analyze_detection_results(self, results, frame_shape) -> Dict:
-        """検出結果解析"""
-        height, width = frame_shape[:2]
-        
-        result = {
-            'hands_detected': False,
-            'hand_count': 0,
-            'hands': [],
-            'processing_time': self.detection_times[-1] if self.detection_times else 0
-        }
-        
-        if results.multi_hand_landmarks and results.multi_handedness:
-            result['hands_detected'] = True
-            result['hand_count'] = len(results.multi_hand_landmarks)
-            
-            # 各手の情報を解析
-            for hand_landmarks, handedness in zip(results.multi_hand_landmarks, results.multi_handedness):
-                hand_info = self._analyze_single_hand(hand_landmarks, handedness, (width, height))
-                result['hands'].append(hand_info)
-        
-        return result
-    
-    def _analyze_single_hand(self, landmarks, handedness, frame_size) -> Dict:
-        """単一の手の解析"""
-        width, height = frame_size
-        
-        # 手の基本情報
-        hand_label = handedness.classification[0].label  # "Left" or "Right"
-        hand_score = handedness.classification[0].score
-        
-        # 手首位置
-        wrist = landmarks.landmark[0]
-        wrist_pos = (wrist.x, wrist.y)
-        
-        # 指の状態解析
-        finger_states = self._analyze_finger_states(landmarks)
-        
-        # 手の向き・角度
-        hand_angle = self._calculate_hand_angle(landmarks)
-        
-        # 手のサイズ
-        hand_size = self._calculate_hand_size(landmarks)
-        
-        # 基本ジェスチャー認識
-        gesture = self._recognize_basic_gesture(finger_states, landmarks)
-        
-        return {
-            'label': hand_label,
-            'confidence': hand_score,
-            'landmarks': landmarks,
-            'wrist_position': wrist_pos,
-            'finger_states': finger_states,
-            'hand_angle': hand_angle,
-            'hand_size': hand_size,
-            'gesture': gesture
-        }
-    
-    def _analyze_finger_states(self, landmarks) -> Dict[str, bool]:
-        """指の状態解析（伸展/屈曲）"""
-        finger_states = {}
-        
-        # 親指（水平方向の判定）
-        thumb_tip = landmarks.landmark[4]
-        thumb_ip = landmarks.landmark[3]
-        thumb_mcp = landmarks.landmark[2]
-        thumb_extended = abs(thumb_tip.x - thumb_mcp.x) > abs(thumb_ip.x - thumb_mcp.x)
-        finger_states['thumb'] = thumb_extended
-        
-        # 他の指（垂直方向の判定）
-        fingers = ['index', 'middle', 'ring', 'pinky']
-        finger_tips = [8, 12, 16, 20]
-        finger_pips = [6, 10, 14, 18]
-        
-        for finger, tip_idx, pip_idx in zip(fingers, finger_tips, finger_pips):
-            tip = landmarks.landmark[tip_idx]
-            pip = landmarks.landmark[pip_idx]
-            # 指先がPIP関節より上にある場合は伸展
-            extended = tip.y < pip.y
-            finger_states[finger] = extended
-        
-        return finger_states
-    
-    def _calculate_hand_angle(self, landmarks) -> float:
-        """手の角度計算"""
-        # 手首から中指MCPへのベクトル
-        wrist = landmarks.landmark[0]
-        middle_mcp = landmarks.landmark[9]
-        
-        # 角度計算
-        dx = middle_mcp.x - wrist.x
-        dy = middle_mcp.y - wrist.y
-        angle = np.degrees(np.arctan2(dy, dx))
-        
-        return angle
-    
-    def _calculate_hand_size(self, landmarks) -> float:
-        """手のサイズ計算"""
-        # 手首から中指先端までの距離
-        wrist = landmarks.landmark[0]
-        middle_tip = landmarks.landmark[12]
-        
-        distance = np.sqrt((middle_tip.x - wrist.x)**2 + (middle_tip.y - wrist.y)**2)
-        return distance
-    
-    def _recognize_basic_gesture(self, finger_states: Dict[str, bool], landmarks) -> str:
-        """基本ジェスチャー認識"""
-        # 指の状態パターンから判定
-        extended_fingers = [finger for finger, extended in finger_states.items() if extended]
-        extended_count = len(extended_fingers)
-        
-        # 基本パターン
-        if extended_count == 0:
-            return "fist"  # 握りこぶし
-        elif extended_count == 1:
-            if finger_states['index']:
-                return "point"  # 指差し
-            elif finger_states['thumb']:
-                return "thumbs_up"  # サムズアップ
-        elif extended_count == 2:
-            if finger_states['index'] and finger_states['middle']:
-                return "peace"  # ピースサイン
-            elif finger_states['thumb'] and finger_states['index']:
-                return "gun"  # 銃の形
-        elif extended_count == 5:
-            return "open_hand"  # 開いた手
-        
-        return "unknown"  # 不明
-    
-    def _get_empty_result(self) -> Dict:
-        """空の結果"""
-        return {
-            'hands_detected': False,
-            'hand_count': 0,
-            'hands': [],
-            'processing_time': 0
-        }
-    
-    def draw_landmarks(self, frame: np.ndarray, detection_result: Dict, 
-                      draw_connections: bool = True) -> np.ndarray:
-        """ランドマーク描画"""
-        if not detection_result['hands_detected']:
-            return frame
-        
+    def _process_hand_results(self, results, frame_shape: Tuple[int, int, int]) -> Dict[str, Any]:
+        """手検出結果の処理"""
         try:
-            for hand_info in detection_result['hands']:
-                landmarks = hand_info['landmarks']
+            height, width = frame_shape[:2]
+            
+            hand_data = {
+                'hands_detected': True,
+                'hand_landmarks': results,
+                'hand_count': len(results.multi_hand_landmarks),
+                'hand_positions': [],
+                'hands': []
+            }
+            
+            # 各手の情報を処理
+            for idx, hand_landmarks in enumerate(results.multi_hand_landmarks):
+                # 手の向き情報を取得
+                handedness = None
+                if results.multi_handedness and idx < len(results.multi_handedness):
+                    handedness = results.multi_handedness[idx].classification[0].label
                 
-                if draw_connections:
-                    # 接続線描画
-                    self.mp_drawing.draw_landmarks(
-                        frame,
-                        landmarks,
-                        self.mp_hands.HAND_CONNECTIONS,
-                        self.mp_drawing_styles.get_default_hand_landmarks_style(),
-                        self.mp_drawing_styles.get_default_hand_connections_style()
-                    )
-                else:
-                    # ランドマークのみ描画
-                    self.mp_drawing.draw_landmarks(
-                        frame,
-                        landmarks,
-                        None,
-                        self.mp_drawing_styles.get_default_hand_landmarks_style()
-                    )
+                hand_info = self._analyze_single_hand(hand_landmarks, width, height, handedness)
+                hand_data['hands'].append(hand_info)
                 
-                # 手の情報テキスト描画
-                self._draw_hand_info(frame, hand_info)
-        
+                # 手首位置を手の位置として記録
+                wrist = hand_landmarks.landmark[0]
+                hand_data['hand_positions'].append((wrist.x, wrist.y))
+            
+            return hand_data
+            
         except Exception as e:
-            print(f"⚠️  ランドマーク描画エラー: {e}")
-        
-        return frame
+            self.logger.error(f"手結果処理エラー: {e}")
+            return {'hands_detected': False}
     
-    def _draw_hand_info(self, frame: np.ndarray, hand_info: Dict):
-        """手の情報テキスト描画"""
-        height, width = frame.shape[:2]
-        
-        # 手首位置から情報表示位置計算
-        wrist_x, wrist_y = hand_info['wrist_position']
-        text_x = int(wrist_x * width)
-        text_y = int(wrist_y * height) - 10
-        
-        # 手の情報
-        label = hand_info['label']
-        confidence = hand_info['confidence']
-        gesture = hand_info['gesture']
-        
-        # テキスト描画
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 0.5
-        color = (255, 255, 255)
-        thickness = 1
-        
-        # 背景矩形
-        text = f"{label}: {gesture} ({confidence:.2f})"
-        (text_width, text_height), _ = cv2.getTextSize(text, font, font_scale, thickness)
-        cv2.rectangle(frame, (text_x - 5, text_y - text_height - 5), 
-                     (text_x + text_width + 5, text_y + 5), (0, 0, 0), -1)
-        
-        # テキスト
-        cv2.putText(frame, text, (text_x, text_y), font, font_scale, color, thickness)
-    
-    def get_performance_stats(self) -> Dict:
-        """パフォーマンス統計取得"""
-        if not self.detection_times:
+    def _analyze_single_hand(self, landmarks, width: int, height: int, handedness: Optional[str]) -> Dict[str, Any]:
+        """個別手の分析"""
+        try:
+            # ランドマークを正規化座標から画素座標に変換
+            landmark_points = []
+            for landmark in landmarks.landmark:
+                x = int(landmark.x * width)
+                y = int(landmark.y * height)
+                z = landmark.z
+                landmark_points.append((x, y, z))
+            
+            # 手首位置（ランドマーク0）
+            wrist = landmarks.landmark[0]
+            wrist_pos = (wrist.x, wrist.y, wrist.z)
+            
+            # 指先位置の取得
+            fingertips = self._get_fingertip_positions(landmarks)
+            
+            # 手の向き推定
+            orientation = self._estimate_hand_orientation(landmarks)
+            
+            # バウンディングボックス計算
+            bbox = self._calculate_hand_bbox(landmark_points, width, height)
+            
+            # 基本的なジェスチャー認識
+            gesture = self._recognize_basic_gesture(landmarks)
+            
+            return {
+                'handedness': handedness,  # 'Left' or 'Right'
+                'wrist_position': wrist_pos,
+                'fingertips': fingertips,
+                'orientation': orientation,
+                'bbox': bbox,
+                'gesture': gesture,
+                'landmark_points': landmark_points,
+                'confidence': 0.8  # MediaPipeは信頼度を直接提供しないため固定値
+            }
+            
+        except Exception as e:
+            self.logger.error(f"手分析エラー: {e}")
             return {}
-        
-        return {
-            'avg_detection_time': sum(self.detection_times) / len(self.detection_times),
-            'max_detection_time': max(self.detection_times),
-            'min_detection_time': min(self.detection_times),
-            'detection_count': self.detection_count,
-            'fps': 1.0 / (sum(self.detection_times) / len(self.detection_times)) if self.detection_times else 0
-        }
+    
+    def _get_fingertip_positions(self, landmarks) -> Dict[str, Tuple[float, float, float]]:
+        """指先位置の取得"""
+        try:
+            # MediaPipe手ランドマークの指先インデックス
+            fingertip_indices = {
+                'thumb': 4,      # 親指
+                'index': 8,      # 人差し指
+                'middle': 12,    # 中指
+                'ring': 16,      # 薬指
+                'pinky': 20      # 小指
+            }
+            
+            fingertips = {}
+            for finger_name, idx in fingertip_indices.items():
+                if idx < len(landmarks.landmark):
+                    landmark = landmarks.landmark[idx]
+                    fingertips[finger_name] = (landmark.x, landmark.y, landmark.z)
+                else:
+                    fingertips[finger_name] = (0.0, 0.0, 0.0)
+            
+            return fingertips
+            
+        except Exception as e:
+            self.logger.error(f"指先位置取得エラー: {e}")
+            return {}
+    
+    def _estimate_hand_orientation(self, landmarks) -> Dict[str, float]:
+        """手の向き推定"""
+        try:
+            # 手首と中指の基準点を使用
+            wrist = landmarks.landmark[0]
+            middle_mcp = landmarks.landmark[9]  # 中指の付け根
+            
+            # 手の向きベクトル
+            dx = middle_mcp.x - wrist.x
+            dy = middle_mcp.y - wrist.y
+            
+            # 角度計算（ラジアンから度に変換）
+            angle = np.degrees(np.arctan2(dy, dx))
+            
+            return {
+                'angle': angle,
+                'vector': (dx, dy)
+            }
+            
+        except Exception as e:
+            self.logger.error(f"手向き推定エラー: {e}")
+            return {'angle': 0.0, 'vector': (0.0, 0.0)}
+    
+    def _calculate_hand_bbox(self, landmark_points, width: int, height: int) -> Tuple[int, int, int, int]:
+        """手のバウンディングボックス計算"""
+        try:
+            if not landmark_points:
+                return (0, 0, 0, 0)
+            
+            x_coords = [point[0] for point in landmark_points]
+            y_coords = [point[1] for point in landmark_points]
+            
+            min_x = max(0, min(x_coords))
+            max_x = min(width, max(x_coords))
+            min_y = max(0, min(y_coords))
+            max_y = min(height, max(y_coords))
+            
+            return (min_x, min_y, max_x - min_x, max_y - min_y)
+            
+        except Exception as e:
+            self.logger.error(f"バウンディングボックス計算エラー: {e}")
+            return (0, 0, 0, 0)
+    
+    def _recognize_basic_gesture(self, landmarks) -> str:
+        """基本的なジェスチャー認識"""
+        try:
+            # 指の伸展状態を判定
+            finger_states = self._get_finger_states(landmarks)
+            
+            # パターンマッチング
+            extended_count = sum(finger_states.values())
+            
+            if extended_count == 0:
+                return "fist"  # 握りこぶし
+            elif extended_count == 1 and finger_states['index']:
+                return "point"  # 指差し
+            elif extended_count == 2 and finger_states['index'] and finger_states['middle']:
+                return "peace"  # ピース
+            elif extended_count == 5:
+                return "open"  # 開いた手
+            else:
+                return "unknown"
+                
+        except Exception as e:
+            self.logger.error(f"ジェスチャー認識エラー: {e}")
+            return "unknown"
+    
+    def _get_finger_states(self, landmarks) -> Dict[str, bool]:
+        """各指の伸展状態判定"""
+        try:
+            finger_states = {}
+            
+            # 親指（特殊処理：横方向の伸展）
+            thumb_tip = landmarks.landmark[4]
+            thumb_ip = landmarks.landmark[3]
+            finger_states['thumb'] = thumb_tip.x > thumb_ip.x  # 簡易判定
+            
+            # 他の指（縦方向の伸展）
+            finger_tips = [8, 12, 16, 20]  # 人差し指、中指、薬指、小指の先端
+            finger_pips = [6, 10, 14, 18]  # 対応する関節
+            finger_names = ['index', 'middle', 'ring', 'pinky']
+            
+            for i, (tip_idx, pip_idx, name) in enumerate(zip(finger_tips, finger_pips, finger_names)):
+                if tip_idx < len(landmarks.landmark) and pip_idx < len(landmarks.landmark):
+                    tip = landmarks.landmark[tip_idx]
+                    pip = landmarks.landmark[pip_idx]
+                    
+                    # 指先が関節より上にあれば伸展
+                    finger_states[name] = tip.y < pip.y
+                else:
+                    finger_states[name] = False
+            
+            return finger_states
+            
+        except Exception as e:
+            self.logger.error(f"指状態判定エラー: {e}")
+            return {'thumb': False, 'index': False, 'middle': False, 'ring': False, 'pinky': False}
+    
+    def get_hand_distance(self, hand_data: Dict[str, Any]) -> float:
+        """手とカメラの距離推定"""
+        try:
+            if not hand_data or 'hands' not in hand_data or not hand_data['hands']:
+                return float('inf')
+            
+            # 最初の手の距離を計算
+            hand = hand_data['hands'][0]
+            wrist_z = hand['wrist_position'][2]
+            
+            # Z座標を距離に変換（簡易版）
+            distance = abs(wrist_z)
+            
+            return distance
+            
+        except Exception as e:
+            self.logger.error(f"手距離推定エラー: {e}")
+            return float('inf')
+    
+    def is_pointing_gesture(self, hand_data: Dict[str, Any]) -> bool:
+        """指差しジェスチャーの判定"""
+        try:
+            if not hand_data or 'hands' not in hand_data:
+                return False
+            
+            for hand in hand_data['hands']:
+                if hand.get('gesture') == 'point':
+                    return True
+            
+            return False
+            
+        except Exception as e:
+            self.logger.error(f"指差し判定エラー: {e}")
+            return False
+    
+    def get_pointing_direction(self, hand_data: Dict[str, Any]) -> Optional[Tuple[float, float]]:
+        """指差し方向の取得"""
+        try:
+            if not self.is_pointing_gesture(hand_data):
+                return None
+            
+            for hand in hand_data['hands']:
+                if hand.get('gesture') == 'point':
+                    orientation = hand.get('orientation', {})
+                    vector = orientation.get('vector', (0.0, 0.0))
+                    return vector
+            
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"指差し方向取得エラー: {e}")
+            return None
     
     def cleanup(self):
         """リソース解放"""
-        if self.hands:
-            self.hands.close()
-        print("Hand Detector リソース解放完了")
-
-# テスト実行用
-if __name__ == "__main__":
-    print("🔍 Hand Detector テスト開始...")
-    
-    # テスト設定
-    config = {
-        'ai_processing': {
-            'vision': {
-                'hand_detection': {
-                    'max_num_hands': 2,
-                    'min_detection_confidence': 0.7,
-                    'min_tracking_confidence': 0.5,
-                    'model_complexity': 1
-                }
-            }
-        }
-    }
-    
-    detector = HandDetector(config)
-    
-    # カメラテスト
-    cap = cv2.VideoCapture(0)
-    if not cap.isOpened():
-        print("❌ カメラを開けません")
-        exit()
-    
-    print("👋 手検出テスト開始（ESCで終了）...")
-    
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        
-        # 手検出
-        result = detector.detect_hands(frame)
-        
-        # 結果描画
-        frame_with_landmarks = detector.draw_landmarks(frame, result, draw_connections=True)
-        
-        # 結果表示
-        cv2.imshow('Hand Detection Test', frame_with_landmarks)
-        
-        if cv2.waitKey(1) & 0xFF == 27:  # ESCキー
-            break
-    
-    cap.release()
-    cv2.destroyAllWindows()
-    
-    # 統計表示
-    stats = detector.get_performance_stats()
-    print(f"📊 性能統計: {stats}")
-    
-    detector.cleanup()
-    print("✅ Hand Detector テスト完了")
+        try:
+            if self.hands:
+                self.hands.close()
+            self.logger.info("手検出器がクリーンアップされました")
+        except Exception as e:
+            self.logger.error(f"手検出器クリーンアップエラー: {e}")
