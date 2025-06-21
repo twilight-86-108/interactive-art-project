@@ -552,3 +552,13 @@ class SceneManager:
         except Exception as e:
             self.logger.error(f"エフェクト数取得エラー: {e}")
             return {'particles': 0, 'ripples': 0, 'other_effects': 0, 'total': 0}
+
+    def apply_quality_settings(self, settings: Dict[str, Any]):
+        """品質設定を適用"""
+        try:
+            self.max_particles = settings.get('particle_count', self.max_particles)
+            # 他の品質関連パラメータもここで更新できる
+            #例: self.effect_quality = settings.get('effect_quality', 'high')
+            self.logger.info(f"シーン品質設定を適用: パーティクル数={self.max_particles}")
+        except Exception as e:
+            self.logger.error(f"品質設定適用エラー: {e}")

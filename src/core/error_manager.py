@@ -9,6 +9,7 @@ import gc
 from enum import Enum
 from typing import Dict, Any, Callable, Optional, List
 from collections import defaultdict, deque
+import unittest
 
 class ErrorSeverity(Enum):
     """エラー重要度レベル"""
@@ -502,53 +503,42 @@ class ErrorManager:
 # テスト・デバッグ機能
 # =============================================================================
 
-def test_error_manager():
-    """エラーマネージャーテスト"""
-    print("🔍 エラーマネージャーテスト開始...")
-    
-    # 設定付きで初期化
-    config = {
-        'error_cooldown': 1.0,
-        'max_retry_count': 2,
-        'auto_demo_mode': True
-    }
-    
-    manager = ErrorManager(config)
-    
-    # テストエラー1: ValueError
-    try:
-        raise ValueError("テスト用ValueError")
-    except Exception as e:
-        result = manager.handle_error(e, ErrorSeverity.WARNING)
-        print(f"エラーハンドリング結果1: {result}")
-    
-    # テストエラー2: CameraError (模擬)
-    class MockContext:
-        def __init__(self):
-            self.demo_mode = False
-        def enable_demo_mode(self):
-            self.demo_mode = True
-    
-    mock_context = MockContext()
-    
-    try:
-        raise RuntimeError("カメラ接続失敗")
-    except Exception as e:
-        # CameraErrorとして処理
-        manager.error_counts['CameraError'] = 5  # 強制的に高いカウント
-        result = manager.handle_error(e, ErrorSeverity.ERROR, mock_context)
-        print(f"カメラエラーハンドリング結果: {result}")
-        print(f"デモモード状態: {manager.is_demo_mode()}")
-    
-    # 統計確認
-    stats = manager.get_error_statistics()
-    print(f"エラー統計: {stats}")
-    
-    # デモデータ取得
-    demo_data = manager.get_demo_detection_result()
-    print(f"デモデータ: {demo_data}")
-    
-    print("✅ エラーマネージャーテスト完了")
+class TestErrorManager(unittest.TestCase):
+    def setUp(self):
+        """テスト準備"""
+        self.config = {
+            'error_cooldown': 0.1,
+            'max_retry_count': 2,
+            'auto_demo_mode': True,
+        }
+
+    def test_error_manager_basic(self):
+        """ErrorManager基本テスト（修正版）"""
+        print("\n🧪 ErrorManager基本テスト開始...")
+        
+        try:
+            error_manager = ErrorManager(self.config)
+            self.assertIsNotNone(error_manager)
+            print("✅ ErrorManager インスタンス作成成功")
+            
+            # テストエラーの処理（返り値型を確認）
+            test_error = RuntimeError("テストエラー")
+            result = error_manager.handle_error(test_error, ErrorSeverity.ERROR)
+            
+            # 返り値の型を確認して適切にテスト
+            self.assertIsInstance(result, RecoveryResult)
+            print(f"✅ エラーハンドリング動作確認: {result}")
+            
+            # エラー統計確認（メソッドが存在する場合）
+            stats = error_manager.get_error_statistics()
+            print(f"✅ エラー統計取得: {stats}")
+            self.assertIsInstance(stats, dict)
+            self.assertIn('total_errors', stats)
+            self.assertGreater(stats['total_errors'], 0)
+            
+        except Exception as e:
+            print(f"❌ ErrorManagerテストエラー: {e}")
+            self.fail(f"ErrorManagerテスト中に例外が発生: {e}")
 
 if __name__ == "__main__":
-    test_error_manager()
+    unittest.main(verbosity=2)

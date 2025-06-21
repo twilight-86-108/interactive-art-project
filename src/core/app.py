@@ -8,37 +8,37 @@ from typing import Dict, Any, Optional
 from collections import deque
 
 # コンポーネントのインポート
-from core.config_loader import ConfigLoader
+from .config_loader import ConfigLoader
 
 # エラーハンドリング・パフォーマンス管理
 try:
-    from core.error_manager import ErrorManager, ErrorSeverity
+    from .error_manager import ErrorManager, ErrorSeverity
 except ImportError:
     print("⚠️ ErrorManager not found, using fallback")
     ErrorManager = None
     ErrorSeverity = None
 
 try:
-    from core.performance_monitor import PerformanceMonitor
+    from .performance_monitor import PerformanceMonitor
 except ImportError:
     print("⚠️ PerformanceMonitor not found, using fallback")
     PerformanceMonitor = None
 
 try:
-    from core.quality_manager import AdaptiveQualityManager
+    from .quality_manager import AdaptiveQualityManager
 except ImportError:
     print("⚠️ AdaptiveQualityManager not found, using fallback")
     AdaptiveQualityManager = None
 
 try:
-    from core.gpu_processor import GPUProcessor
+    from .gpu_processor import GPUProcessor
 except ImportError:
     print("⚠️ GPUProcessor not found, using fallback")
     GPUProcessor = None
 
 # AI処理コンポーネント
 try:
-    from vision.vision_processor import VisionProcessor
+    from src.vision.vision_processor import VisionProcessor
 except ImportError:
     print("⚠️ VisionProcessor not found, using fallback")
     VisionProcessor = None
@@ -51,14 +51,14 @@ class _EmotionFallback(Enum):
     SURPRISED = "surprised"
 
 try:
-    from emotion.emotion_analyzer import EmotionAnalyzer, Emotion
+    from src.emotion.emotion_analyzer import EmotionAnalyzer, Emotion
 except ImportError:
     print("⚠️ EmotionAnalyzer not found, using fallback")
     EmotionAnalyzer = None
     Emotion = _EmotionFallback
 
 try:
-    from scene import SceneManager
+    from src.scene import SceneManager
 except ImportError:
     print("⚠️ SceneManager not found, using fallback")
     SceneManager = None
@@ -287,7 +287,7 @@ class AquaMirrorApp:
         """GPU処理確認"""
         try:
             if (self.vision_processor and 
-                hasattr(self.vision_processor, 'gpu_processor') and
+                self.vision_processor.gpu_processor and
                 hasattr(self.vision_processor.gpu_processor, 'is_gpu_available')):
                 gpu_status = "有効" if self.vision_processor.gpu_processor.is_gpu_available() else "無効"
                 self.logger.info(f"🖥️ GPU加速: {gpu_status}")
