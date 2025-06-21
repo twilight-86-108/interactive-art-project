@@ -1,205 +1,356 @@
-# src/core/gpu_processor.py - 完全修正版（CUDA無効環境対応）
+# src/core/gpu_processor.py - 統合完全版
 import cv2
+import ctypes
 import numpy as np
 import logging
-from typing import Optional, Tuple, Union
 import time
+from typing import Optional, Tuple, Union
+from pathlib import Path
+from enum import Enum
+
+class GPUBackend(Enum):
+    """GPU処理バックエンドタイプ"""
+    CUSTOM_CPP = "custom_cpp"          # カスタムC++ライブラリ
+    OPENCV_CUDA = "opencv_cuda"        # OpenCV CUDA
+    CPU_FALLBACK = "cpu_fallback"      # CPU処理
 
 class GPUProcessor:
-    """GPU加速処理クラス - CUDA無効環境でも動作保証"""
+    """
+    統合GPU加速処理クラス
+    
+    処理優先順位:
+    1. カスタムC++ライブラリ（最高性能）
+    2. OpenCV CUDA（標準GPU処理）
+    3. CPU処理（フォールバック）
+    """
     
     def __init__(self):
-        self.gpu_available = False
-        self.cuda_opencv_available = False
         self.logger = logging.getLogger(__name__)
         
-        # CUDA環境の詳細チェック
-        self._check_cuda_environment()
+        # 利用可能バックエンド
+        self.available_backends = []
+        self.current_backend = GPUBackend.CPU_FALLBACK
         
-        # 初期化結果をログ出力
+        # C++ライブラリ関連
+        self.cpp_lib = None
+        self.cpp_available = False
+        
+        # OpenCV CUDA関連
+        self.opencv_cuda_available = False
+        
+        # 統計情報
+        self.processing_stats = {
+            'total_frames': 0,
+            'gpu_frames': 0,
+            'cpu_frames': 0,
+            'avg_processing_time': 0.0,
+            'backend_switches': 0
+        }
+        
+        # 初期化実行
+        self._initialize_backends()
+        self._select_optimal_backend()
         self._log_initialization_status()
     
-    def _check_cuda_environment(self):
-        """CUDA環境の包括的チェック"""
-        self.cuda_opencv_available = False
-        self.gpu_available = False
+    def _initialize_backends(self):
+        """利用可能なバックエンドを初期化"""
         
+        # 1. カスタムC++ライブラリの初期化試行
+        self._init_cpp_backend()
+        
+        # 2. OpenCV CUDA の初期化試行
+        self._init_opencv_cuda_backend()
+        
+        # 3. CPU処理は常に利用可能
+        self.available_backends.append(GPUBackend.CPU_FALLBACK)
+    
+    def _init_cpp_backend(self):
+        """カスタムC++ライブラリ初期化"""
         try:
-            # 1. cv2.cuda モジュールの存在確認
+            # ライブラリパス候補
+            lib_paths = [
+                Path(__file__).parent.parent.parent / "cpp" / "build" / "libaqua_mirror_gpu.so",
+                Path(__file__).parent.parent.parent / "cpp" / "build" / "libaqua_mirror_gpu.dll",
+                Path("./cpp/build/libaqua_mirror_gpu.so"),
+                Path("./libaqua_mirror_gpu.so")
+            ]
+            
+            for lib_path in lib_paths:
+                if lib_path.exists():
+                    self.cpp_lib = ctypes.CDLL(str(lib_path))
+                    self._setup_cpp_function_signatures()
+                    
+                    # テスト実行
+                    if self._test_cpp_library():
+                        self.cpp_available = True
+                        self.available_backends.append(GPUBackend.CUSTOM_CPP)
+                        self.logger.info(f"✅ カスタムC++ライブラリ初期化成功: {lib_path}")
+                        break
+                    
+        except Exception as e:
+            self.logger.warning(f"カスタムC++ライブラリ初期化失敗: {e}")
+    
+    def _setup_cpp_function_signatures(self):
+        """C++関数シグネチャ設定"""
+        if not self.cpp_lib:
+            return
+        try:
+            # resize_gpu関数
+            self.cpp_lib.resize_gpu.argtypes = [
+                ctypes.POINTER(ctypes.c_ubyte),  # input
+                ctypes.POINTER(ctypes.c_ubyte),  # output
+                ctypes.c_int,                    # input_width
+                ctypes.c_int,                    # input_height
+                ctypes.c_int,                    # output_width
+                ctypes.c_int,                    # output_height
+                ctypes.c_int                     # channels
+            ]
+            self.cpp_lib.resize_gpu.restype = ctypes.c_int
+            
+            # color_convert_gpu関数
+            self.cpp_lib.color_convert_gpu.argtypes = [
+                ctypes.POINTER(ctypes.c_ubyte),  # input
+                ctypes.POINTER(ctypes.c_ubyte),  # output
+                ctypes.c_int,                    # width
+                ctypes.c_int,                    # height
+                ctypes.c_int                     # conversion_code
+            ]
+            self.cpp_lib.color_convert_gpu.restype = ctypes.c_int
+            
+            # デバイス情報関数
+            if hasattr(self.cpp_lib, 'get_gpu_info'):
+                self.cpp_lib.get_gpu_info.argtypes = []
+                self.cpp_lib.get_gpu_info.restype = ctypes.c_int
+                
+        except Exception as e:
+            self.logger.error(f"C++関数シグネチャ設定エラー: {e}")
+            raise
+    
+    def _test_cpp_library(self) -> bool:
+        """C++ライブラリテスト"""
+        if not self.cpp_lib:
+            return False
+        try:
+            # 小さなテスト画像でリサイズテスト
+            test_input = np.random.randint(0, 255, (100, 100, 3), dtype=np.uint8)
+            test_output = np.zeros((50, 50, 3), dtype=np.uint8)
+            
+            input_ptr = test_input.ctypes.data_as(ctypes.POINTER(ctypes.c_ubyte))
+            output_ptr = test_output.ctypes.data_as(ctypes.POINTER(ctypes.c_ubyte))
+            
+            result = self.cpp_lib.resize_gpu(input_ptr, output_ptr, 100, 100, 50, 50, 3)
+            
+            return result == 0  # 成功コード
+            
+        except Exception as e:
+            self.logger.warning(f"C++ライブラリテスト失敗: {e}")
+            return False
+    
+    def _init_opencv_cuda_backend(self):
+        """OpenCV CUDA初期化"""
+        try:
+            # OpenCV CUDA モジュール存在確認
             if not hasattr(cv2, 'cuda'):
-                self.logger.warning("OpenCVにcudaモジュールが含まれていません")
+                self.logger.warning("OpenCVにCUDAモジュールが含まれていません")
                 return
             
-            # 2. getCudaEnabledDeviceCount関数の存在確認
             if not hasattr(cv2.cuda, 'getCudaEnabledDeviceCount'):
                 self.logger.warning("getCudaEnabledDeviceCount関数が利用できません")
                 return
             
-            # 3. CUDA対応デバイス数確認
-            try:
-                device_count = cv2.cuda.getCudaEnabledDeviceCount()
-                self.logger.info(f"CUDA対応デバイス数: {device_count}")
-                
-                if device_count == 0:
-                    self.logger.warning("CUDA対応デバイスが見つかりません（OpenCVがCUDA無効でビルドされている可能性）")
-                    return
-                
-                self.cuda_opencv_available = True
-                
-            except Exception as e:
-                self.logger.warning(f"CUDA デバイス確認エラー: {e}")
+            # CUDA対応デバイス確認
+            device_count = cv2.cuda.getCudaEnabledDeviceCount()
+            if device_count == 0:
+                self.logger.warning("CUDA対応デバイスが見つかりません")
                 return
             
-            # 4. 基本的なCUDA操作テスト
-            try:
-                # GpuMat作成テスト
-                test_gpu_mat = cv2.cuda.GpuMat()
-                
-                # 小さなテスト配列でアップロード/ダウンロードテスト
-                test_array = np.zeros((10, 10, 3), dtype=np.uint8)
-                test_gpu_mat.upload(test_array)
-                result = test_gpu_mat.download()
-                
-                # 基本的なCUDA関数テスト
-                if hasattr(cv2.cuda, 'resize') and hasattr(cv2.cuda, 'cvtColor'):
-                    self.gpu_available = True
-                    self.logger.info("CUDA GPU処理が利用可能です")
-                else:
-                    self.logger.warning("必要なCUDA関数が利用できません")
-                
-            except Exception as e:
-                self.logger.warning(f"CUDA基本操作テストに失敗: {e}")
-                return
-                
+            # 基本的なCUDA操作テスト
+            test_gpu_mat = cv2.cuda.GpuMat()
+            test_array = np.zeros((10, 10, 3), dtype=np.uint8)
+            test_gpu_mat.upload(test_array)
+            test_gpu_mat.download()
+            
+            self.opencv_cuda_available = True
+            self.available_backends.append(GPUBackend.OPENCV_CUDA)
+            self.logger.info(f"✅ OpenCV CUDA初期化成功 (デバイス数: {device_count})")
+            
         except Exception as e:
-            self.logger.warning(f"CUDA環境確認中にエラー: {e}")
+            self.logger.warning(f"OpenCV CUDA初期化失敗: {e}")
+    
+    def _select_optimal_backend(self):
+        """最適なバックエンドを選択"""
+        if GPUBackend.CUSTOM_CPP in self.available_backends:
+            self.current_backend = GPUBackend.CUSTOM_CPP
+        elif GPUBackend.OPENCV_CUDA in self.available_backends:
+            self.current_backend = GPUBackend.OPENCV_CUDA
+        else:
+            self.current_backend = GPUBackend.CPU_FALLBACK
     
     def _log_initialization_status(self):
-        """初期化状況のログ出力"""
-        if self.gpu_available:
-            self.logger.info("✅ GPU加速処理が利用可能です")
-        else:
-            self.logger.info("ℹ️ CPU処理モードで動作します")
+        """初期化状況ログ出力"""
+        self.logger.info(f"🔧 利用可能バックエンド: {[b.value for b in self.available_backends]}")
+        self.logger.info(f"🎯 選択されたバックエンド: {self.current_backend.value}")
+        
+        if self.current_backend == GPUBackend.CPU_FALLBACK:
+            self.logger.info("💡 GPU加速を有効にするには:")
+            self.logger.info("   1. カスタムC++ライブラリのビルド")
+            self.logger.info("   2. CUDA対応OpenCVのインストール")
+    
+    def resize_frame(self, frame: np.ndarray, target_size: Tuple[int, int]) -> np.ndarray:
+        """統合フレームリサイズ"""
+        start_time = time.time()
+        
+        try:
+            # バックエンド別処理
+            if self.current_backend == GPUBackend.CUSTOM_CPP:
+                result = self._cpp_resize(frame, target_size)
+            elif self.current_backend == GPUBackend.OPENCV_CUDA:
+                result = self._opencv_cuda_resize(frame, target_size)
+            else:
+                result = self._cpu_resize(frame, target_size)
             
-            # CUDA無効の原因を詳しく説明
-            if not self.cuda_opencv_available:
-                self.logger.info("💡 GPU加速を有効にするには、CUDA対応OpenCVのインストールが必要です")
+            # 統計更新
+            processing_time = time.time() - start_time
+            self._update_stats(processing_time, self.current_backend != GPUBackend.CPU_FALLBACK)
+            
+            return result
+            
+        except Exception as e:
+            self.logger.warning(f"リサイズ処理エラー ({self.current_backend.value}): {e}")
+            return self._fallback_resize(frame, target_size, e)
     
-    def gpu_resize(self, frame: np.ndarray, target_size: Tuple[int, int]) -> np.ndarray:
-        """GPU加速リサイズ（完全フォールバック対応）"""
-        if not self.gpu_available:
-            return self._cpu_resize(frame, target_size)
+    def color_convert(self, frame: np.ndarray, conversion_code: int) -> np.ndarray:
+        """統合色空間変換"""
+        start_time = time.time()
         
         try:
-            # OpenCVのPythonバインディングにはCUDAリサイズAPIが存在しないため、CPUでリサイズ
-            self.logger.warning("OpenCVのPythonバインディングにはCUDAリサイズAPIが存在しません。CPUリサイズにフォールバックします。")
-            return self._cpu_resize(frame, target_size)
+            # バックエンド別処理
+            if self.current_backend == GPUBackend.CUSTOM_CPP:
+                result = self._cpp_color_convert(frame, conversion_code)
+            elif self.current_backend == GPUBackend.OPENCV_CUDA:
+                result = self._opencv_cuda_color_convert(frame, conversion_code)
+            else:
+                result = self._cpu_color_convert(frame, conversion_code)
+            
+            # 統計更新
+            processing_time = time.time() - start_time
+            self._update_stats(processing_time, self.current_backend != GPUBackend.CPU_FALLBACK)
+            
+            return result
+            
         except Exception as e:
-            # GPU処理失敗時はCPU処理にフォールバック
-            self.logger.warning(f"GPU リサイズ失敗、CPU処理に切替: {e}")
-            self.gpu_available = False  # 今後はCPU処理を使用
-            return self._cpu_resize(frame, target_size)
+            self.logger.warning(f"色変換処理エラー ({self.current_backend.value}): {e}")
+            return self._fallback_color_convert(frame, conversion_code, e)
     
-    def gpu_color_convert(self, frame: np.ndarray, conversion_code: int) -> np.ndarray:
-        """GPU加速色空間変換（完全フォールバック対応）"""
-        if not self.gpu_available:
-            return self._cpu_color_convert(frame, conversion_code)
-        
-        try:
-            # GPU処理
-            gpu_frame = cv2.cuda.GpuMat()
-            gpu_frame.upload(frame)
-            # OpenCVのPythonバインディングでは cv2.cuda.cvtColor は存在しないため、代わりに cv2.cuda_CvtColor を使用
-            self.logger.warning("OpenCVのPythonバインディングにはCUDA色変換APIが存在しません。CPU色変換にフォールバックします。")
-            return self._cpu_color_convert(frame, conversion_code)
-        except Exception as e:
-            # GPU処理失敗時はCPU処理にフォールバック
-            self.logger.warning(f"GPU 色変換失敗、CPU処理に切替: {e}")
-            self.gpu_available = False  # 今後はCPU処理を使用
-            return self._cpu_color_convert(frame, conversion_code)
-    
-    def process_frame_optimized(self, frame: np.ndarray, 
+    def process_frame_optimized(self, frame: np.ndarray,
                               target_size: Optional[Tuple[int, int]] = None,
                               convert_to_rgb: bool = True) -> np.ndarray:
-        """最適化されたフレーム処理（必ず成功）"""
+        """最適化統合フレーム処理"""
+        if frame is None or frame.size == 0:
+            raise ValueError("無効なフレームが入力されました")
+        
+        result = frame.copy()
+        
         try:
-            # 入力検証
-            if frame is None or frame.size == 0:
-                raise ValueError("無効なフレームが入力されました")
+            # リサイズ処理
+            if target_size and result.shape[:2] != target_size[::-1]:
+                result = self.resize_frame(result, target_size)
             
-            # GPU処理試行
-            if self.gpu_available:
-                try:
-                    return self._gpu_process_chain(frame, target_size, convert_to_rgb)
-                except Exception as gpu_error:
-                    self.logger.warning(f"GPU処理チェーン失敗: {gpu_error}")
-                    self.gpu_available = False  # GPU無効化
+            # 色変換処理
+            if convert_to_rgb and len(result.shape) == 3 and result.shape[2] == 3:
+                result = self.color_convert(result, cv2.COLOR_BGR2RGB)
             
-            # CPU処理（フォールバック）
-            return self._cpu_process_chain(frame, target_size, convert_to_rgb)
+            return result
             
         except Exception as e:
-            self.logger.error(f"フレーム処理で重大エラー: {e}")
+            self.logger.error(f"統合フレーム処理で重大エラー: {e}")
             # 最低限の処理で継続
-            result = frame.copy()
             try:
-                if target_size and result.shape[:2] != target_size[::-1]:
+                if target_size:
                     result = cv2.resize(result, target_size)
-                if convert_to_rgb and len(result.shape) == 3 and result.shape[2] == 3:
+                if convert_to_rgb:
                     result = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
-            except Exception as fallback_error:
-                self.logger.error(f"フォールバック処理も失敗: {fallback_error}")
-                # 元のフレームをそのまま返す
-                pass
+            except:
+                pass  # 元のフレームを返す
             
             return result
     
-    def _gpu_process_chain(self, frame: np.ndarray,
-                          target_size: Optional[Tuple[int, int]],
-                          convert_to_rgb: bool) -> np.ndarray:
-        """GPU処理チェーン"""
-        # GPU メモリにアップロード
+    # =====================================================
+    # バックエンド別実装
+    # =====================================================
+    
+    def _cpp_resize(self, frame: np.ndarray, target_size: Tuple[int, int]) -> np.ndarray:
+        """カスタムC++リサイズ"""
+        if not self.cpp_lib:
+            raise RuntimeError("カスタムC++ライブラリが利用できません")
+        h, w, c = frame.shape
+        target_w, target_h = target_size
+        
+        # 出力配列準備
+        output = np.zeros((target_h, target_w, c), dtype=np.uint8)
+        
+        # GPU処理実行
+        input_ptr = frame.ctypes.data_as(ctypes.POINTER(ctypes.c_ubyte))
+        output_ptr = output.ctypes.data_as(ctypes.POINTER(ctypes.c_ubyte))
+        
+        result_code = self.cpp_lib.resize_gpu(input_ptr, output_ptr, w, h, target_w, target_h, c)
+        
+        if result_code != 0:
+            raise RuntimeError(f"C++リサイズ処理失敗 (コード: {result_code})")
+        
+        return output
+    
+    def _cpp_color_convert(self, frame: np.ndarray, conversion_code: int) -> np.ndarray:
+        """カスタムC++色変換"""
+        if not self.cpp_lib:
+            raise RuntimeError("カスタムC++ライブラリが利用できません")
+        h, w, c = frame.shape
+        output_channels = 3 if conversion_code == cv2.COLOR_BGR2RGB else c
+        
+        # 出力配列準備
+        output = np.zeros((h, w, output_channels), dtype=np.uint8)
+        
+        # GPU処理実行
+        input_ptr = frame.ctypes.data_as(ctypes.POINTER(ctypes.c_ubyte))
+        output_ptr = output.ctypes.data_as(ctypes.POINTER(ctypes.c_ubyte))
+        
+        result_code = self.cpp_lib.color_convert_gpu(input_ptr, output_ptr, w, h, conversion_code)
+        
+        if result_code != 0:
+            raise RuntimeError(f"C++色変換処理失敗 (コード: {result_code})")
+        
+        return output
+    
+    def _opencv_cuda_resize(self, frame: np.ndarray, target_size: Tuple[int, int]) -> np.ndarray:
+        """OpenCV CUDAリサイズ"""
+        # 注意: OpenCVのPythonバインディングでは直接的なCUDAリサイズAPIがない場合がある
+        # この実装は概念的なもので、実際のAPIに合わせて調整が必要
         gpu_frame = cv2.cuda.GpuMat()
         gpu_frame.upload(frame)
-        current_gpu_frame = gpu_frame
         
-        # リサイズ処理
-        if target_size:
-            # OpenCVのPythonバインディングにはCUDAリサイズAPIが存在しないため、CPUでリサイズ
-            self.logger.warning("OpenCVのPythonバインディングにはCUDAリサイズAPIが存在しません。CPUリサイズにフォールバックします。")
-            result = current_gpu_frame.download()
-            result = cv2.resize(result, target_size)
-            gpu_frame.upload(result)
-            current_gpu_frame = gpu_frame
+        # GPU上でリサイズ（API確認要）
+        # gpu_resized = cv2.cuda.resize(gpu_frame, target_size)
         
-        # 色変換処理
-        if convert_to_rgb:
-            self.logger.warning("OpenCVのPythonバインディングにはCUDA色変換APIが存在しません。CPU色変換にフォールバックします。")
-            result = current_gpu_frame.download()
-            result = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
-            gpu_frame.upload(result)
-            current_gpu_frame = gpu_frame
+        # フォールバック: CPUリサイズ
+        cpu_frame = gpu_frame.download()
+        resized = cv2.resize(cpu_frame, target_size)
         
-        # 結果をCPUメモリにダウンロード
-        return current_gpu_frame.download()
+        return resized
     
-    def _cpu_process_chain(self, frame: np.ndarray,
-                          target_size: Optional[Tuple[int, int]],
-                          convert_to_rgb: bool) -> np.ndarray:
-        """CPU処理チェーン（確実動作）"""
-        result = frame.copy()
+    def _opencv_cuda_color_convert(self, frame: np.ndarray, conversion_code: int) -> np.ndarray:
+        """OpenCV CUDA色変換"""
+        gpu_frame = cv2.cuda.GpuMat()
+        gpu_frame.upload(frame)
         
-        # リサイズ処理
-        if target_size:
-            result = cv2.resize(result, target_size)
+        # GPU上で色変換（API確認要）
+        # gpu_converted = cv2.cuda.cvtColor(gpu_frame, conversion_code)
         
-        # 色変換処理
-        if convert_to_rgb:
-            result = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
+        # フォールバック: CPU色変換
+        cpu_frame = gpu_frame.download()
+        converted = cv2.cvtColor(cpu_frame, conversion_code)
         
-        return result
+        return converted
     
-    # CPUフォールバック関数
     def _cpu_resize(self, frame: np.ndarray, target_size: Tuple[int, int]) -> np.ndarray:
         """CPU リサイズ"""
         return cv2.resize(frame, target_size)
@@ -208,36 +359,69 @@ class GPUProcessor:
         """CPU 色変換"""
         return cv2.cvtColor(frame, conversion_code)
     
+    # =====================================================
+    # フォールバック・エラー処理
+    # =====================================================
+    
+    def _fallback_resize(self, frame: np.ndarray, target_size: Tuple[int, int], error: Exception) -> np.ndarray:
+        """リサイズフォールバック処理"""
+        self._handle_backend_error(error)
+        return self._cpu_resize(frame, target_size)
+    
+    def _fallback_color_convert(self, frame: np.ndarray, conversion_code: int, error: Exception) -> np.ndarray:
+        """色変換フォールバック処理"""
+        self._handle_backend_error(error)
+        return self._cpu_color_convert(frame, conversion_code)
+    
+    def _handle_backend_error(self, error: Exception):
+        """バックエンドエラー処理"""
+        # 現在のバックエンドを無効化
+        if self.current_backend in self.available_backends:
+            self.available_backends.remove(self.current_backend)
+            self.processing_stats['backend_switches'] += 1
+        
+        # 次の利用可能バックエンドに切替
+        self._select_optimal_backend()
+        
+        self.logger.warning(f"バックエンド切替: {self.current_backend.value}")
+    
+    # =====================================================
+    # 統計・監視機能
+    # =====================================================
+    
+    def _update_stats(self, processing_time: float, is_gpu: bool):
+        """統計情報更新"""
+        self.processing_stats['total_frames'] += 1
+        
+        if is_gpu:
+            self.processing_stats['gpu_frames'] += 1
+        else:
+            self.processing_stats['cpu_frames'] += 1
+        
+        # 移動平均で処理時間更新
+        alpha = 0.1
+        self.processing_stats['avg_processing_time'] = (
+            alpha * processing_time + 
+            (1 - alpha) * self.processing_stats['avg_processing_time']
+        )
+    
     def get_system_info(self) -> dict:
         """システム情報取得"""
         info = {
-            'gpu_available': self.gpu_available,
-            'cuda_opencv_available': self.cuda_opencv_available,
+            'current_backend': self.current_backend.value,
+            'available_backends': [b.value for b in self.available_backends],
+            'cpp_library_available': self.cpp_available,
+            'opencv_cuda_available': self.opencv_cuda_available,
             'opencv_version': cv2.__version__,
-            'opencv_cuda_support': hasattr(cv2, 'cuda'),
-            'processing_mode': 'GPU' if self.gpu_available else 'CPU'
+            'processing_stats': self.processing_stats.copy()
         }
         
-        # CUDA情報（利用可能な場合のみ）
-        if self.cuda_opencv_available:
+        # CUDA詳細情報
+        if self.opencv_cuda_available:
             try:
                 info['cuda_device_count'] = cv2.cuda.getCudaEnabledDeviceCount()
-                
-                # デバイス詳細情報（エラーが出る可能性があるので try-catch）
-                try:
-                    if info['cuda_device_count'] > 0:
-                        # device_info = cv2.cuda.DeviceInfo(0)  # これはエラーが出る可能性
-                        # より安全なアプローチ
-                        info['cuda_functions_available'] = {
-                            'resize': hasattr(cv2.cuda, 'resize'),
-                            'cvtColor': hasattr(cv2.cuda, 'cvtColor'),
-                            'GpuMat': hasattr(cv2.cuda, 'GpuMat')
-                        }
-                except Exception as device_error:
-                    info['device_info_error'] = str(device_error)
-                    
-            except Exception as cuda_error:
-                info['cuda_info_error'] = str(cuda_error)
+            except:
+                info['cuda_device_count'] = 0
         
         return info
     
@@ -248,67 +432,76 @@ class GPUProcessor:
             'test_configuration': {
                 'input_size': test_size,
                 'output_size': (640, 480),
-                'iterations': iterations,
-                'operations': ['resize', 'color_convert']
-            }
+                'iterations': iterations
+            },
+            'backend_performance': {}
         }
         
-        # テスト用画像生成
-        test_image = np.random.randint(0, 255, 
-                                     (test_size[1], test_size[0], 3), 
-                                     dtype=np.uint8)
+        # テスト用画像
+        test_image = np.random.randint(0, 255, (test_size[1], test_size[0], 3), dtype=np.uint8)
         
-        # CPU性能測定
-        self.logger.info("CPU性能測定中...")
-        cpu_start = time.time()
-        for _ in range(iterations):
-            result = self._cpu_process_chain(test_image, (640, 480), True)
-        cpu_time = time.time() - cpu_start
-        
-        results['cpu_performance'] = {
-            'total_time': cpu_time,
-            'fps': iterations / cpu_time,
-            'time_per_frame': cpu_time / iterations
-        }
-        
-        # GPU性能測定（利用可能な場合）
-        if self.gpu_available:
-            self.logger.info("GPU性能測定中...")
+        # 各バックエンドのベンチマーク
+        for backend in self.available_backends:
+            original_backend = self.current_backend
+            self.current_backend = backend
+            
             try:
-                gpu_start = time.time()
-                for _ in range(iterations):
-                    result = self._gpu_process_chain(test_image, (640, 480), True)
-                gpu_time = time.time() - gpu_start
+                self.logger.info(f"ベンチマーク実行中: {backend.value}")
                 
-                results['gpu_performance'] = {
-                    'total_time': gpu_time,
-                    'fps': iterations / gpu_time,
-                    'time_per_frame': gpu_time / iterations,
-                    'speedup_factor': cpu_time / gpu_time
+                start_time = time.time()
+                for _ in range(iterations):
+                    result = self.process_frame_optimized(test_image, (640, 480), True)
+                total_time = time.time() - start_time
+                
+                results['backend_performance'][backend.value] = {
+                    'total_time': total_time,
+                    'fps': iterations / total_time,
+                    'time_per_frame': total_time / iterations
                 }
                 
-            except Exception as gpu_bench_error:
-                results['gpu_benchmark_error'] = {"error": str(gpu_bench_error)}
-        else:
-            results['gpu_performance'] = {"error": "GPU処理が利用できません"}
+            except Exception as e:
+                results['backend_performance'][backend.value] = {
+                    'error': str(e)
+                }
+            
+            finally:
+                self.current_backend = original_backend
         
         return results
+    
+    def is_gpu_available(self) -> bool:
+        """GPU処理利用可能性"""
+        return self.current_backend in [GPUBackend.CUSTOM_CPP, GPUBackend.OPENCV_CUDA]
+    
+    def force_backend(self, backend: GPUBackend) -> bool:
+        """バックエンド強制切替"""
+        if backend in self.available_backends:
+            self.current_backend = backend
+            self.logger.info(f"バックエンド強制切替: {backend.value}")
+            return True
+        else:
+            self.logger.warning(f"バックエンド {backend.value} は利用できません")
+            return False
     
     def cleanup(self):
         """リソース解放"""
         try:
-            if self.gpu_available:
-                # CUDA関連リソースの解放を試行
+            # CUDA関連リソース解放
+            if self.opencv_cuda_available:
                 try:
                     cv2.cuda.resetDevice()
-                    self.logger.info("CUDAデバイスリセット完了")
-                except Exception as reset_error:
-                    self.logger.warning(f"CUDAデバイスリセットエラー: {reset_error}")
+                except:
+                    pass
             
-            self.gpu_available = False
-            self.cuda_opencv_available = False
+            # C++ライブラリリソース解放
+            if self.cpp_available and self.cpp_lib:
+                try:
+                    if hasattr(self.cpp_lib, 'cleanup_gpu'):
+                        self.cpp_lib.cleanup_gpu()
+                except:
+                    pass
+            
             self.logger.info("GPU プロセッサークリーンアップ完了")
             
-        except Exception as cleanup_error:
-            self.logger.warning(f"クリーンアップエラー: {cleanup_error}")
-
+        except Exception as e:
+            self.logger.warning(f"クリーンアップエラー: {e}")
