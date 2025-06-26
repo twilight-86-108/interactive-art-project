@@ -1,131 +1,51 @@
 {
-  "_comment": "Aqua Mirror - メイン設定ファイル",
-  
-  "system": {
-    "name": "Aqua Mirror",
+  "app": {
+    "name": "Aqua Mirror ModernGL",
     "version": "1.0.0",
-    "debug_mode": false,
-    "presentation_mode": false,
-    "demo_mode": false
+    "window": {
+      "width": 1920,
+      "height": 1080,
+      "fullscreen": false,
+      "vsync": true
+    }
   },
-  
+  "gpu": {
+    "opengl_version": [4, 1],
+    "opengl_profile": "compatibility",
+    "preferred_gpu": "auto",
+    "enable_debug": true,
+    "memory_limit_gb": 4
+  },
   "camera": {
     "device_id": 0,
     "width": 1920,
     "height": 1080,
     "fps": 30,
-    "auto_settings": {
-      "autofocus": false,
-      "auto_exposure": true,
-      "auto_white_balance": true
-    }
+    "auto_focus": false,
+    "auto_exposure": 0.25
   },
-  
-  "display": {
-    "width": 1920,
-    "height": 1080,
-    "fullscreen": false,
-    "monitor_index": 0
-  },
-  
-  "detection": {
-    "face_detection_confidence": 0.7,
-    "hand_detection_confidence": 0.7,
-    "max_num_faces": 1,
-    "max_num_hands": 2,
-    "face_detection": {
-      "model_complexity": 1,
-      "min_detection_confidence": 0.7,
-      "min_tracking_confidence": 0.5,
-      "max_num_faces": 1,
-      "refine_landmarks": true
+  "ai": {
+    "mediapipe": {
+      "face_detection_confidence": 0.7,
+      "face_tracking_confidence": 0.5,
+      "hand_detection_confidence": 0.7,
+      "hand_tracking_confidence": 0.5
     },
-    "hand_detection": {
-      "model_complexity": 1,
-      "min_detection_confidence": 0.7,
-      "min_tracking_confidence": 0.5,
-      "max_num_hands": 2
+    "emotion": {
+      "smoothing_factor": 0.8,
+      "confidence_threshold": 0.6
     }
   },
-  
-  "emotion": {
-    "enabled": true,
-    "smoothing_window": 10,
-    "confidence_threshold": 0.6,
-    "calibration_enabled": true
-  },
-  
-  "gesture": {
-    "enabled": true,
-    "recognition_timeout": 2.0,
-    "custom_gestures": true
-  },
-  
-  "interaction": {
-    "approach_threshold_z": 0.8,
-    "interaction_regions": {
-      "water_surface": {
-        "x": 400,
-        "y": 300,
-        "width": 1120,
-        "height": 480
-      }
-    }
-  },
-  
-  "visual_effects": {
-    "quality_level": "high",
-    "particles": {
-      "max_count": 1000,
-      "gpu_acceleration": true
-    },
-    "water_effects": {
-      "wave_simulation": true,
-      "caustics": true
-    },
-    "colors": {
-      "saturation_boost": 1.2,
-      "transition_speed": 0.5
-    }
-  },
-  
-  "audio": {
-    "enabled": true,
-    "master_volume": 0.7,
-    "sample_rate": 22050,
-    "channels": 2,
-    "procedural_generation": true
-  },
-  
-  "performance": {
+  "rendering": {
     "target_fps": 30,
-    "adaptive_quality": true,
-    "memory_limit_mb": 16384,
-    "monitoring_enabled": true
+    "quality_level": "medium",
+    "enable_post_processing": false,
+    "water_simulation_resolution": 256
   },
-  
-  "assets": {
-    "background_image": "assets/images/underwater_scene.jpg",
-    "fish_images": ["assets/images/fish1.png", "assets/images/fish2.png"],
-    "sounds": {
-      "splash": "assets/sounds/splash.wav",
-      "bubble": "assets/sounds/bubble.wav"
-    }
-  },
-  
-  "logging": {
-    "level": "INFO",
-    "file_output": true,
-    "console_output": true,
-    "max_file_size": "10MB",
-    "backup_count": 5,
-    "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-  },
-  
-  "development": {
-    "hot_reload": false,
-    "profiling": false,
-    "benchmark_mode": false,
-    "save_debug_frames": false
+  "debug": {
+    "show_fps": true,
+    "show_gpu_stats": true,
+    "enable_shader_hot_reload": true,
+    "log_level": "INFO"
   }
 }

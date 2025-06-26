@@ -1,0 +1,57 @@
+FROM nvidia/cuda:11.8.0-devel-ubuntu22.04 AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# ビルド専用依存関係
+RUN apt-get update && apt-get install -y \
+    python3.11 python3.11-dev python3.11-venv python3-pip \
+    build-essential cmake git pkg-config curl wget \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+RUN python3.11 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+COPY requirements.txt .
+RUN pip install --upgrade pip wheel setuptools
+RUN pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt
+RUN pip install --no-cache-dir --find-links /wheels -r requirements.txt
+
+# ステージ2: ランタイム環境（軽量）
+FROM nvidia/cuda:11.8.0-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV DISPLAY=:0
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=all
+
+# ランタイム専用依存関係
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 python3.11-venv \
+    libgl1-mesa-glx libglu1-mesa libglfw3 libglew2.2 \
+    mesa-utils glslang-tools xvfb x11-utils \
+    libopenal1 libsndfile1 portaudio19-dev \
+    v4l-utils libv4l-0 curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean \
+    && rm -rf /var/cache/apt/archives/* \
+    && rm -rf /usr/share/doc/* \
+    && rm -rf /usr/share/man/*
+
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+WORKDIR /app
+COPY src/ ./src/
+COPY assets/ ./assets/
+COPY config/ ./config/
+COPY main.py requirements.txt ./
+COPY docker-entrypoint.sh /
+
+RUN chmod +x /docker-entrypoint.sh
+RUN useradd -m -u 1000 aqua && chown -R aqua:aqua /app
+USER aqua
+
+EXPOSE 8080
+ENTRYPOINT ["/docker-entrypoint.sh"]
+CMD ["python3.11", "main.py", "--config", "config/config.json"]

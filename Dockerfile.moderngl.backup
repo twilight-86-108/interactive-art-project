@@ -1,0 +1,73 @@
+FROM nvidia/cuda:11.8.0-devel-ubuntu22.04
+
+# または
+
+# オプション2: CUDA 11.8.0 with cuDNN（深層学習が必要な場合）
+# FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
+
+# または
+
+# オプション3: より新しいCUDA 12.x系（最新安定版）
+# FROM nvidia/cuda:12.2.0-devel-ubuntu22.04
+
+# 環境変数
+ENV DEBIAN_FRONTEND=noninteractive
+ENV DISPLAY=:0
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=all
+
+# システム依存関係
+RUN apt-get update && apt-get install -y \
+    python3.11 \
+    python3.11-dev \
+    python3.11-venv \
+    python3-pip \
+    build-essential \
+    cmake \
+    git \
+    pkg-config \
+    # OpenGL/グラフィクス関連
+    libgl1-mesa-dev \
+    libglu1-mesa-dev \
+    libglew-dev \
+    libglfw3-dev \
+    mesa-utils \
+    glslang-tools \
+    # X11関連
+    xvfb \
+    x11-apps \
+    x11-utils \
+    # 音響関連
+    libopenal-dev \
+    libsndfile1-dev \
+    portaudio19-dev \
+    # カメラ関連
+    v4l-utils \
+    uvcdynctrl \
+    libv4l-dev \
+    # その他
+    curl \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# 作業ディレクトリ
+WORKDIR /app
+
+# Python環境
+RUN python3.11 -m pip install --upgrade pip
+
+# 依存関係インストール
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# アプリケーションコピー
+COPY . .
+
+# エントリーポイント
+COPY docker-entrypoint.sh /
+RUN chmod +x /docker-entrypoint.sh
+
+EXPOSE 8080
+
+ENTRYPOINT ["/docker-entrypoint.sh"]
+CMD ["python3.11", "main.py", "--config", "config/config.json"]

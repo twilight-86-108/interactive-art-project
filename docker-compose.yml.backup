@@ -1,0 +1,53 @@
+version: '3.8'
+
+services:
+  aqua-mirror-moderngl:
+    build:
+      context: .
+      dockerfile: Dockerfile.moderngl
+    container_name: aqua-mirror-moderngl
+    
+    # GPU アクセス
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - DISPLAY=${DISPLAY}
+      - QT_X11_NO_MITSHM=1
+    
+    # デバイス・権限
+    devices:
+      - /dev/video0:/dev/video0  # Logicool C922N
+      - /dev/snd:/dev/snd        # 音響
+    
+    # ボリューム
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - .:/app
+      - ./logs:/app/logs
+      - ./config:/app/config
+    
+    # ネットワーク
+    ports:
+      - "8080:8080"
+    
+    # 制限
+    deploy:
+      resources:
+        limits:
+          memory: 16G
+        reservations:
+          memory: 8G
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    
+    # ヘルスチェック
+    healthcheck:
+      test: ["CMD", "python3.11", "-c", "import moderngl; print('OK')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    
+    restart: unless-stopped
