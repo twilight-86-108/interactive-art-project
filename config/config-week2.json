@@ -1,0 +1,27 @@
+{
+ "app": {
+    "name": "Aqua Mirror Windows Week2",
+    "version": "1.1.0"
+  },
+  "camera": {
+    "width": 640,
+    "height": 480,
+    "fps": 30,
+    "enable_high_quality": true
+  },
+  "ai": {
+    "advanced_features": true,
+    "gesture_recognition": true,
+    "emotion_precision": "high"
+  },
+  "rendering": {
+    "target_fps": 30,
+    "quality_level": "ultra",
+    "enable_advanced_effects": true
+  },
+  "week2": {
+    "enable_water_physics": true,
+    "enable_gesture_effects": true,
+    "enable_ai_calibration": true
+  }
+}

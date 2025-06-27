@@ -1,6 +1,6 @@
 """
-ModernGL Aqua Mirror - 感情エフェクト統合版
-GPU加速感情認識+視覚エフェクトシステム
+ModernGL Aqua Mirror - メインアプリケーション（カメラ統合版）
+GPU加速感情認識インタラクティブアート
 """
 
 import time
@@ -21,14 +21,11 @@ from src.core.gl_context_manager import GLContextManager
 from src.core.performance_monitor import PerformanceMonitor
 from src.vision.camera_manager import CameraManager
 from src.rendering.texture_manager import TextureManager
-from src.emotion.mediapipe_processor import MediaPipeProcessor
-from src.emotion.emotion_analyzer import EmotionAnalyzer
-from src.effects.emotion_effects import EmotionEffectManager
 
 class ModernGLApp:
     """
     Aqua Mirror ModernGL版メインアプリケーション
-    感情認識→GPU視覚エフェクト統合システム
+    感情認識→GPU水面エフェクト統合システム
     """
     
     def __init__(self, config_path: str = "config/config.json"):
@@ -49,29 +46,20 @@ class ModernGLApp:
         self.camera: Optional[CameraManager] = None
         self.texture_manager: Optional[TextureManager] = None
         
-        # AI コンポーネント
-        self.mediapipe_processor: Optional[MediaPipeProcessor] = None
-        self.emotion_analyzer: Optional[EmotionAnalyzer] = None
-        
-        # エフェクトシステム
-        self.emotion_effects: Optional[EmotionEffectManager] = None
-        
         # GPU/OpenGL関連
         self.ctx: Optional[moderngl.Context] = None
         self.window = None
         
-        # レンダリング
-        self.emotion_program: Optional[moderngl.Program] = None
+        # 基本レンダリング
+        self.camera_program: Optional[moderngl.Program] = None
         self.quad_vao: Optional[moderngl.VertexArray] = None
         
         # 状態管理
         self.frame_count = 0
         self.last_time = time.time()
         self.camera_enabled = False
-        self.ai_enabled = True
-        self.effects_enabled = True
         
-        self.logger.info("🌊 Aqua Mirror ModernGL版（感情エフェクト統合）初期化中...")
+        self.logger.info("🌊 Aqua Mirror ModernGL版（カメラ統合）初期化中...")
     
     def _setup_logging(self):
         """ログシステム設定"""
@@ -83,7 +71,11 @@ class ModernGLApp:
         self.logger = logging.getLogger("AquaMirror")
     
     def initialize(self) -> bool:
-        """アプリケーション初期化"""
+        """
+        アプリケーション初期化
+        Returns:
+            bool: 初期化成功フラグ
+        """
         try:
             self.logger.info("🔧 システム初期化開始...")
             
@@ -103,15 +95,7 @@ class ModernGLApp:
             if not self._initialize_camera():
                 return False
             
-            # 5. AI システム初期化
-            if not self._initialize_ai():
-                return False
-            
-            # 6. エフェクトシステム初期化
-            if not self._initialize_effects():
-                return False
-            
-            # 7. レンダリングシステム初期化
+            # 5. レンダリングシステム初期化
             if not self._initialize_rendering():
                 return False
             
@@ -124,7 +108,7 @@ class ModernGLApp:
             return False
     
     def _initialize_glfw(self) -> bool:
-        """GLFW初期化"""
+        """GLFW初期化 - OpenGL 4.1対応版"""
         if not glfw.init():
             self.logger.error("❌ GLFW初期化失敗")
             return False
@@ -219,11 +203,12 @@ class ModernGLApp:
             self.camera = CameraManager(self.config)
             
             if self.camera.initialize():
+                # カメラストリーミング開始
                 if self.camera.start_streaming():
                     self.camera_enabled = True
                     self.logger.info("✅ カメラシステム初期化完了")
                 else:
-                    self.logger.warning("⚠️ カメラストリーミング開始失敗")
+                    self.logger.warning("⚠️ カメラストリーミング開始失敗（シミュレーションモード）")
             else:
                 self.logger.warning("⚠️ カメラ初期化失敗（シミュレーションモード）")
             
@@ -233,49 +218,10 @@ class ModernGLApp:
             self.logger.error(f"❌ カメラシステム初期化失敗: {e}")
             return False
     
-    def _initialize_ai(self) -> bool:
-        """AI システム初期化"""
-        try:
-            # MediaPipe プロセッサー
-            self.mediapipe_processor = MediaPipeProcessor(self.config)
-            
-            # 感情認識エンジン
-            self.emotion_analyzer = EmotionAnalyzer(self.config)
-            
-            self.logger.info("✅ AI システム初期化完了")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"❌ AI システム初期化失敗: {e}")
-            return False
-    
-    def _initialize_effects(self) -> bool:
-        """エフェクトシステム初期化"""
-        try:
-            # 感情エフェクトマネージャー
-            self.emotion_effects = EmotionEffectManager(self.ctx, self.config)
-            
-            self.logger.info("✅ エフェクトシステム初期化完了")
-            return True
-            
-        except Exception as e:
-            self.logger.error(f"❌ エフェクトシステム初期化失敗: {e}")
-            return False
-    
     def _initialize_rendering(self) -> bool:
         """レンダリングシステム初期化"""
         try:
-            # 感情エフェクトシェーダー読み込み
-            emotion_shader_path = Path("assets/shaders/emotion/emotion_visual.frag")
-            
-            if emotion_shader_path.exists():
-                with open(emotion_shader_path, 'r') as f:
-                    fragment_shader = f.read()
-            else:
-                # フォールバックシェーダー
-                fragment_shader = self._get_fallback_fragment_shader()
-            
-            # 頂点シェーダー
+            # カメラ表示用シェーダープログラム作成
             vertex_shader = """
             #version 410 core
             
@@ -290,8 +236,33 @@ class ModernGLApp:
             }
             """
             
-            # シェーダープログラム作成
-            self.emotion_program = self.ctx.program(
+            fragment_shader = """
+            #version 410 core
+            
+            in vec2 v_texcoord;
+            out vec4 fragColor;
+            
+            uniform sampler2D u_camera_texture;
+            uniform bool u_camera_enabled;
+            uniform float u_time;
+            
+            void main() {
+                vec2 uv = v_texcoord;
+                
+                if (u_camera_enabled) {
+                    // カメラ画像表示
+                    vec3 camera_color = texture(u_camera_texture, uv).rgb;
+                    fragColor = vec4(camera_color, 1.0);
+                } else {
+                    // カメラ無効時のテストパターン
+                    float gradient = sin(uv.x * 3.14159 + u_time) * 0.5 + 0.5;
+                    vec3 color = mix(vec3(0.2, 0.6, 1.0), vec3(0.8, 0.4, 1.0), gradient);
+                    fragColor = vec4(color, 1.0);
+                }
+            }
+            """
+            
+            self.camera_program = self.ctx.program(
                 vertex_shader=vertex_shader,
                 fragment_shader=fragment_shader
             )
@@ -309,7 +280,7 @@ class ModernGLApp:
             
             self.quad_vao = self.gl_context.create_vertex_array(
                 "fullscreen_quad", 
-                self.emotion_program, 
+                self.camera_program, 
                 vertices, 
                 indices
             )
@@ -321,67 +292,22 @@ class ModernGLApp:
             self.logger.error(f"❌ レンダリング初期化失敗: {e}")
             return False
     
-    def _get_fallback_fragment_shader(self) -> str:
-        """フォールバックフラグメントシェーダー"""
-        return """
-        #version 410 core
-        
-        in vec2 v_texcoord;
-        out vec4 fragColor;
-        
-        uniform sampler2D u_camera_texture;
-        uniform bool u_camera_enabled;
-        uniform float u_time;
-        uniform int u_emotion_type;
-        uniform float u_emotion_intensity;
-        uniform vec3 u_emotion_color;
-        uniform float u_ripple_strength;
-        uniform float u_color_blend_factor;
-        uniform float u_glow_intensity;
-        
-        void main() {
-            vec2 uv = v_texcoord;
-            vec3 final_color = vec3(0.0);
-            
-            if (u_camera_enabled) {
-                final_color = texture(u_camera_texture, uv).rgb;
-            } else {
-                float gradient = sin(uv.x * 3.14159 + u_time) * 0.5 + 0.5;
-                final_color = mix(vec3(0.2, 0.6, 1.0), vec3(0.8, 0.4, 1.0), gradient);
-            }
-            
-            // 簡単な感情色彩ブレンド
-            if (u_emotion_intensity > 0.01) {
-                final_color = mix(final_color, u_emotion_color, 
-                                u_color_blend_factor * u_emotion_intensity);
-            }
-            
-            fragColor = vec4(final_color, 1.0);
-        }
-        """
-    
     def run(self):
         """メインループ実行"""
         if not self.initialized:
             self.logger.error("❌ 初期化されていません")
             return
         
-        self.logger.info("🚀 メインループ開始（感情エフェクト統合版）")
+        self.logger.info("🚀 メインループ開始（カメラ統合版）")
         self.running = True
         
         # パフォーマンス監視開始
         if self.performance_monitor:
             self.performance_monitor.start_monitoring()
         
-        frame_start_time = time.time()
-        
         try:
             while not glfw.window_should_close(self.window) and self.running:
-                current_time = time.time()
-                delta_time = current_time - frame_start_time
-                frame_start_time = current_time
-                
-                self._update_frame(delta_time)
+                self._update_frame()
                 
         except KeyboardInterrupt:
             self.logger.info("⏹️ ユーザーによる終了")
@@ -390,7 +316,7 @@ class ModernGLApp:
         finally:
             self.cleanup()
     
-    def _update_frame(self, delta_time: float):
+    def _update_frame(self):
         """フレーム更新"""
         frame_start = time.time()
         
@@ -399,12 +325,6 @@ class ModernGLApp:
         
         # カメラフレーム処理
         self._process_camera_frame()
-        
-        # AI 処理
-        emotion_result = self._process_ai()
-        
-        # エフェクト更新
-        self._update_effects(emotion_result, delta_time)
         
         # 描画
         self._render_frame()
@@ -431,72 +351,31 @@ class ModernGLApp:
         if not self.camera_enabled or not self.camera:
             return
         
+        # 最新フレーム取得
         frame = self.camera.get_frame()
-        if frame is not None and self.texture_manager:
-            self.texture_manager.upload_camera_frame(frame)
-    
-    def _process_ai(self) -> Optional[Dict[str, Any]]:
-        """AI 処理"""
-        if not self.ai_enabled or not self.camera_enabled or not self.camera:
-            return None
-        
-        frame = self.camera.get_frame()
-        if frame is None:
-            return None
-        
-        try:
-            # MediaPipe処理
-            if self.mediapipe_processor:
-                mp_results = self.mediapipe_processor.process_frame(frame)
-                
-                # 感情認識
-                if self.emotion_analyzer:
-                    emotion_result = self.emotion_analyzer.analyze_emotion(mp_results)
-                    return emotion_result
-        
-        except Exception as e:
-            self.logger.error(f"AI処理エラー: {e}")
-        
-        return None
-    
-    def _update_effects(self, emotion_result: Optional[Dict[str, Any]], delta_time: float):
-        """エフェクト更新"""
-        if not self.effects_enabled or not self.emotion_effects:
-            return
-        
-        if emotion_result:
-            self.emotion_effects.update_emotion(emotion_result)
-        
-        self.emotion_effects.update_animation(delta_time)
+        if frame is not None:
+            # GPU テクスチャ転送
+            if self.texture_manager:
+                self.texture_manager.upload_camera_frame(frame)
     
     def _render_frame(self):
         """フレーム描画"""
         # 画面クリア
         self.ctx.clear(0.0, 0.0, 0.0, 1.0)
         
-        if self.emotion_program and self.quad_vao:
-            # 基本ユニフォーム設定
-            self.emotion_program['u_camera_enabled'] = self.camera_enabled
+        # 描画
+        if self.camera_program and self.quad_vao:
+            # ユニフォーム設定
+            current_time = time.time()
+            self.camera_program['u_time'] = current_time
+            self.camera_program['u_camera_enabled'] = self.camera_enabled
             
             # カメラテクスチャバインド
             if self.camera_enabled and self.texture_manager:
                 camera_texture = self.texture_manager.get_camera_texture()
                 if camera_texture:
                     camera_texture.use(0)
-                    self.emotion_program['u_camera_texture'] = 0
-            
-            # エフェクトパラメータ適用
-            if self.effects_enabled and self.emotion_effects:
-                self.emotion_effects.apply_to_shader(self.emotion_program)
-            else:
-                # デフォルトパラメータ
-                self.emotion_program['u_time'] = time.time()
-                self.emotion_program['u_emotion_type'] = 4  # NEUTRAL
-                self.emotion_program['u_emotion_intensity'] = 0.0
-                self.emotion_program['u_emotion_color'] = (0.5, 0.5, 0.5)
-                self.emotion_program['u_ripple_strength'] = 0.0
-                self.emotion_program['u_color_blend_factor'] = 0.0
-                self.emotion_program['u_glow_intensity'] = 0.0
+                    self.camera_program['u_camera_texture'] = 0
             
             # 描画
             self.quad_vao.render()
@@ -514,12 +393,12 @@ class ModernGLApp:
         if self.camera:
             camera_stats = self.camera.get_camera_stats()
             stats_lines.append(f"カメラFPS: {camera_stats['actual_fps']:.1f}")
+            stats_lines.append(f"ドロップ: {camera_stats['dropped_frames']}")
         
-        # AI統計
-        if self.emotion_analyzer:
-            emotion_info = self.emotion_analyzer.get_current_emotion_info()
-            stats_lines.append(f"感情: {emotion_info['emotion_name']}")
-            stats_lines.append(f"強度: {emotion_info['intensity']:.2f}")
+        # テクスチャ統計
+        if self.texture_manager:
+            texture_stats = self.texture_manager.get_upload_stats()
+            stats_lines.append(f"GPU転送: {texture_stats['avg_upload_time_ms']:.1f}ms")
         
         self.logger.info(" | ".join(stats_lines))
     
@@ -532,23 +411,6 @@ class ModernGLApp:
                 # カメラオンオフ切り替え
                 self.camera_enabled = not self.camera_enabled
                 self.logger.info(f"カメラ: {'ON' if self.camera_enabled else 'OFF'}")
-            elif key == glfw.KEY_A:
-                # AI処理オンオフ切り替え
-                self.ai_enabled = not self.ai_enabled
-                self.logger.info(f"AI処理: {'ON' if self.ai_enabled else 'OFF'}")
-            elif key == glfw.KEY_E:
-                # エフェクトオンオフ切り替え
-                self.effects_enabled = not self.effects_enabled
-                self.logger.info(f"エフェクト: {'ON' if self.effects_enabled else 'OFF'}")
-            elif key == glfw.KEY_1 and self.emotion_effects:
-                # 波紋エフェクト切り替え
-                self.emotion_effects.toggle_ripples()
-            elif key == glfw.KEY_2 and self.emotion_effects:
-                # グローエフェクト切り替え
-                self.emotion_effects.toggle_glow()
-            elif key == glfw.KEY_3 and self.emotion_effects:
-                # 色彩ブレンド切り替え
-                self.emotion_effects.toggle_color_blend()
             elif key == glfw.KEY_P and self.performance_monitor:
                 # パフォーマンス統計表示
                 summary = self.performance_monitor.get_performance_summary()
@@ -567,10 +429,6 @@ class ModernGLApp:
         # パフォーマンス監視停止
         if self.performance_monitor:
             self.performance_monitor.stop_monitoring()
-        
-        # AI コンポーネント解放
-        if self.mediapipe_processor:
-            self.mediapipe_processor.cleanup()
         
         # カメラ停止
         if self.camera:

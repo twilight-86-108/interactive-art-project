@@ -26,6 +26,7 @@ MANIFEST
 venv/
 env/
 ENV/
+venv-3118/
 
 # ModernGL/OpenGL
 *.glsl.cache
