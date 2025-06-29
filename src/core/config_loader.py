@@ -71,10 +71,33 @@ class ConfigLoader:
             self.logger.error(f"設定値変更エラー: {e}")
             return False
     
+    def get(self, key: str, default: Any = None) -> Any:
+        """ドット記法でキー取得"""
+        try:
+            keys = key.split('.')
+            value = self.config_data
+            for k in keys:
+                value = value[k]
+            return value
+        except (KeyError, TypeError):
+            return default
+    
+    def get_all(self) -> Dict[str, Any]:
+        """全設定取得"""
+        return self.config_data.copy()
+    
+    def _get_default_config(self) -> Dict[str, Any]:
+        """デフォルト設定"""
+        return {
+            "app": {"name": "Aqua Mirror", "debug_mode": True},
+            "display": {"width": 640, "height": 480},
+            "camera": {"device_index": 0}
+        }
+
     def save_config(self) -> bool:
         """設定ファイル保存"""
         try:
-            with open(self.config_path, 'w', encoding='utf-8') as f:
+            with open(self.config_path, 'w', encoding='utf-8-sig') as f:
                 json.dump(self.config_data, f, indent=2, ensure_ascii=False)
             
             self.logger.info("設定ファイル保存完了")

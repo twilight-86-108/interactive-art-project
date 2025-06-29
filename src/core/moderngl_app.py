@@ -31,13 +31,13 @@ class ModernGLApp:
     感情認識→GPU視覚エフェクト統合システム
     """
     
-    def __init__(self, config_path: str = "config/config.json"):
+    def __init__(self, config: ConfigLoader):
         # コンソール・ログ設定
         self.console = Console()
         self._setup_logging()
         
         # 設定読み込み
-        self.config = ConfigLoader(config_path)
+        self.config = config
         
         # 初期化フラグ
         self.initialized = False
@@ -70,6 +70,11 @@ class ModernGLApp:
         self.camera_enabled = False
         self.ai_enabled = True
         self.effects_enabled = True
+
+         # FPS計算用
+        self.fps_last_time = 0.0
+        self.fps_frame_count = 0
+        self.current_fps = 0.0
         
         self.logger.info("🌊 Aqua Mirror ModernGL版（感情エフェクト統合）初期化中...")
     
@@ -426,6 +431,21 @@ class ModernGLApp:
             self._print_stats()
             self.last_time = current_time
     
+    def update_fps(self):
+        """FPSカウンターを更新する"""
+        now = time.time()
+        # 最初のフレームの場合
+        if self.fps_last_time == 0:
+            self.fps_last_time = now
+        
+        self.fps_frame_count += 1
+        
+        # 1秒以上経過したらFPSを計算
+        if now - self.fps_last_time >= 1.0:
+            self.current_fps = self.fps_frame_count / (now - self.fps_last_time)
+            self.fps_frame_count = 0
+            self.fps_last_time = now
+
     def _process_camera_frame(self):
         """カメラフレーム処理・GPU転送"""
         if not self.camera_enabled or not self.camera:
@@ -554,6 +574,20 @@ class ModernGLApp:
                 summary = self.performance_monitor.get_performance_summary()
                 print(summary)
     
+    def should_close(self) -> bool:
+        """ウィンドウを閉じるべきか確認する (glfwに問い合わせる)"""
+        if self.window:
+            return glfw.window_should_close(self.window)
+        # ウィンドウが存在しない場合は、ループを終了させる
+        return True
+
+    def swap_buffers(self):
+        """フレームバッファを交換する"""
+        if self.window:
+            glfw.swap_buffers(self.window)
+            glfw.poll_events()
+
+
     def _resize_callback(self, window, width, height):
         """ウィンドウリサイズイベント処理"""
         if self.ctx:
