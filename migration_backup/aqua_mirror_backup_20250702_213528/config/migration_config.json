@@ -1,0 +1,43 @@
+{
+  "migration": {
+    "version": "1.0",
+    "timestamp": 1751459048.380882,
+    "from_framework": "glfw",
+    "to_framework": "pygame",
+    "target_gpu": "nvidia_rtx_4060",
+    "platform": "windows"
+  },
+  "pygame": {
+    "display": {
+      "width": 1920,
+      "height": 1080,
+      "fullscreen": false,
+      "title": "Aqua Mirror - Pygame + ModernGL (Windows)"
+    },
+    "opengl": {
+      "major_version": 4,
+      "minor_version": 3,
+      "profile": "core",
+      "double_buffer": true,
+      "depth_size": 24,
+      "multisample": true
+    }
+  },
+  "gpu": {
+    "enable_nvidia": true,
+    "force_dedicated_gpu": true,
+    "environment_variables": {
+      "CUDA_VISIBLE_DEVICES": "0",
+      "NVIDIA_VISIBLE_DEVICES": "all",
+      "__GL_SYNC_TO_VBLANK": "1"
+    }
+  },
+  "compatibility": {
+    "preserve_existing_components": true,
+    "glfw_callback_mapping": {
+      "key_callback": "pygame.KEYDOWN/KEYUP",
+      "window_size_callback": "pygame.VIDEORESIZE",
+      "mouse_callback": "pygame.MOUSEBUTTONDOWN/UP"
+    }
+  }
+}

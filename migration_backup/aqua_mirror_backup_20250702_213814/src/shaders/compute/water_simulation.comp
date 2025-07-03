@@ -1,0 +1,69 @@
+// assets/shaders/compute/water_simulation.comp
+#version 430 core
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(rgba32f, binding = 0) uniform image2D current_height;
+layout(rgba32f, binding = 1) uniform image2D previous_height;
+layout(rgba32f, binding = 2) uniform image2D velocity_field;
+
+uniform float u_wave_speed;
+uniform float u_damping;
+uniform float u_dt;
+uniform vec2 u_ripple_pos;
+uniform float u_ripple_strength;
+uniform float u_emotion_intensity;
+
+void main() {
+    ivec2 coord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(current_height);
+    
+    if (coord.x >= size.x || coord.y >= size.y) return;
+    
+    // 現在の水面高さ
+    float current = imageLoad(current_height, coord).r;
+    float previous = imageLoad(previous_height, coord).r;
+    
+    // 近隣セルからの影響計算
+    float neighbor_sum = 0.0;
+    int neighbor_count = 0;
+    
+    for (int dx = -1; dx <= 1; dx++) {
+        for (int dy = -1; dy <= 1; dy++) {
+            if (dx == 0 && dy == 0) continue;
+            
+            ivec2 neighbor = coord + ivec2(dx, dy);
+            if (neighbor.x >= 0 && neighbor.x < size.x && 
+                neighbor.y >= 0 && neighbor.y < size.y) {
+                neighbor_sum += imageLoad(current_height, neighbor).r;
+                neighbor_count++;
+            }
+        }
+    }
+    
+    float average_neighbor = neighbor_sum / float(neighbor_count);
+    
+    // 波動方程式: d²h/dt² = c²∇²h
+    float acceleration = u_wave_speed * u_wave_speed * (average_neighbor - current);
+    
+    // 感情による波紋追加
+    float dist_to_ripple = distance(vec2(coord), u_ripple_pos * vec2(size));
+    if (dist_to_ripple < 50.0) {
+        float ripple_intensity = u_ripple_strength * u_emotion_intensity;
+        float ripple_force = ripple_intensity * exp(-dist_to_ripple * 0.1);
+        acceleration += ripple_force;
+    }
+    
+    // Verlet積分による時間発展
+    float new_height = 2.0 * current - previous + acceleration * u_dt * u_dt;
+    new_height *= u_damping; // 減衰
+    
+    // 境界条件（反射）
+    if (coord.x == 0 || coord.x == size.x-1 || coord.y == 0 || coord.y == size.y-1) {
+        new_height *= 0.5;
+    }
+    
+    // 結果保存
+    imageStore(previous_height, coord, vec4(current));
+    imageStore(current_height, coord, vec4(new_height, 0.0, 0.0, 1.0));
+}

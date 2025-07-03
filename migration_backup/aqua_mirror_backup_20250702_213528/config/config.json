@@ -1,0 +1,56 @@
+{
+  "app": {
+    "name": "Aqua Mirror Windows Week2",
+    "version": "2.0.0",
+    "debug_mode": true
+  },
+  "display": {
+    "width": 1920,
+    "height": 1080,
+    "fullscreen": false,
+    "target_fps": 30
+  },
+  "camera": {
+    "device_index": 0,
+    "width": 1920,
+    "height": 1080,
+    "fps": 30
+  },
+  "ai": {
+    "emotion": {
+      "smoothing_factor": 0.8,
+      "confidence_threshold": 0.6,
+      "calibration_samples": 100
+    },
+    "gesture": {
+      "max_hands": 2,
+      "detection_confidence": 0.7,
+      "tracking_confidence": 0.5
+    },
+    "mediapipe": {
+      "face_detection_confidence": 0.7,
+      "hand_detection_confidence": 0.7,
+      "hand_tracking_confidence": 0.5,
+      "face_num_faces": 1,
+      "refine_landmarks": true
+    }
+  },
+  "rendering": {
+    "water_simulation_resolution": 512,
+    "opengl_version": [4, 3],
+    "vsync": true,
+    "quality_level": "high"
+  },
+  "audio": {
+    "sample_rate": 44100,
+    "buffer_size": 1024,
+    "master_volume": 0.5
+  },
+  "week2": {
+    "enable_advanced_emotion": true,
+    "enable_gesture_recognition": true,
+    "enable_water_physics": true,
+    "enable_audio_engine": true,
+    "enable_interaction_manager": true
+  }
+}
